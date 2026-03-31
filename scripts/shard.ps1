@@ -371,8 +371,10 @@ function Detect-SystemSpecs {
     $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
     if ($smi) {
         try {
+            $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
             $raw = & nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>$null | Out-String
-            $lines = $raw.Trim() -split "`r?`n" | Where-Object { $_ -match "\S" }
+            $ErrorActionPreference = $prevEAP
+            $lines = @($raw.Trim() -split "`r?`n" | Where-Object { $_ -match "\S" })
             if ($lines.Count -gt 0) {
                 $parts = $lines[0] -split ","
                 $specs.GPUName = $parts[0].Trim()
@@ -380,14 +382,16 @@ function Detect-SystemSpecs {
                     $specs.VRAM_GB = [Math]::Round([double]$parts[1].Trim() / 1024, 1)
                 }
             }
-        } catch {}
+        } catch { $ErrorActionPreference = $prevEAP }
 
         try {
+            $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
             $rawCuda = & nvidia-smi 2>$null | Out-String
+            $ErrorActionPreference = $prevEAP
             if ($rawCuda -match "CUDA Version:\s*([0-9]+\.[0-9]+)") {
                 $specs.CUDAVersion = $Matches[1]
             }
-        } catch {}
+        } catch { $ErrorActionPreference = $prevEAP }
     }
 
     return $specs
