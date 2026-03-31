@@ -3,7 +3,7 @@ param(
     [switch]$SkipModelDownload,
     [string]$LlamaCppTag,
     [switch]$Force,
-    [string]$ModelRepo = "mradermacher/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF",
+    [string]$ModelRepo = "Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled",
     [string]$ModelFile = "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf"
 )
 

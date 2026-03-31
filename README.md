@@ -2,7 +2,7 @@
 
 **Run a 27B reasoning model locally. One command. Auto-tuned to your hardware.**
 
-Shard wraps [Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled](https://huggingface.co/mradermacher/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF) with a zero-config launcher that detects your GPU, benchmarks your system, and picks the fastest settings automatically. No YAML files. No guessing `-ngl` values. Just `shard`.
+Shard wraps [Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled](https://huggingface.co/Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled) with a zero-config launcher that detects your GPU, benchmarks your system, and picks the fastest settings automatically. No YAML files. No guessing `-ngl` values. Just `shard`.
 
 ---
 
@@ -293,4 +293,4 @@ Default profiles ship with these values. Run `shard recalc` to replace them with
 
 ## License
 
-This repo provides tooling and configuration only. The model weights are subject to their upstream license. See the [model card](https://huggingface.co/mradermacher/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF) for details.
+This repo provides tooling and configuration only. The model weights are subject to their upstream license. See the [model card](https://huggingface.co/Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled) for details.
