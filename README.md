@@ -14,7 +14,7 @@ Shard wraps the [Qwen3.5-Claude-4.6-Opus-Reasoning-Distilled](https://huggingfac
 | **One-command install** | Downloads llama.cpp + model + creates the `shard` command globally |
 | **Auto hardware detection** | Detects your GPU, VRAM, CPU cores, CUDA version |
 | **Auto-tuning** | Benchmarks your specific machine and generates optimized profiles |
-| **5 built-in profiles** | From fast daily chat (4K context) to deep reasoning (32K context) |
+| **8 built-in profiles** | From fast daily chat (4K context) to full native window (256K context) |
 | **Per-model profiles** | Each model gets its own tuned profiles — recalc one, many, or all |
 | **Smart quant picker** | Detects your VRAM/RAM and recommends the best quantization per model |
 | **OpenAI-compatible API** | Drop-in replacement at `localhost:8080/v1` for any app that speaks OpenAI |
@@ -59,7 +59,7 @@ Server is now live at **`http://127.0.0.1:8080/v1`** — compatible with any Ope
 
 ```powershell
 shard stop       # stop the server
-shard 2          # switch to a different profile (1-7)
+shard 2          # switch to a different profile (1-8)
 shard ls         # see all profiles with speeds
 shard status     # check what's running
 shard model 9B   # switch to a different model
@@ -90,11 +90,15 @@ shard: detected system specs
 
 Runs `llama-bench` and `llama-completion` across multiple GPU layer offload values and context sizes, then saves the fastest working configuration for each profile:
 
-1. **Detects your VRAM** and filters out ngl values that clearly won't fit
-2. Sweeps `-ngl` candidates at 4K context to find your best speed
-3. **Adaptively narrows** candidates for 8K, 16K, and 32K
-4. Calculates optimal thread count from your CPU
-5. Saves everything to `.shard/profiles.json` under the model's key
+1. **Kills lingering llama processes** to ensure clean VRAM state
+2. **Detects your VRAM** and filters out ngl values that clearly won't fit
+3. Sweeps `-ngl` candidates at 4K context to find your best speed
+4. **Adaptively narrows** candidates for 8K, 16K, 32K, 64K, 128K, and 256K
+5. Calculates optimal thread count from your CPU
+6. Saves everything to `.shard/profiles.json` under the model's key
+7. **Auto-updates OpenCode config** if it exists
+
+Phase count is dynamic — models with higher max context get more test phases (up to 7 phases for 256K-capable models).
 
 Recalc supports targeting specific models:
 
