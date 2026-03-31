@@ -1,0 +1,24 @@
+# Large local model artifacts
+models/
+
+# Local llama.cpp binaries and runtime DLLs
+tools/
+
+# Optional benchmark/log outputs
+*.log
+*.out
+*.csv
+*.jsonl
+
+# Local ortega launcher runtime state
+.ortega/
+
+# Python artifacts (if scripts are added later)
+__pycache__/
+*.pyc
+.venv/
+
+# Editor/system noise
+.vscode/
+.DS_Store
+Thumbs.db
