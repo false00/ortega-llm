@@ -41,6 +41,24 @@ $defaultProfiles = [ordered]@{
         FlashAttn = "on"
         Speed = "9.23 tok/s"
     }
+    "4" = @{
+        Name = "XL Context"
+        Description = "16K token context for extended reasoning"
+        Context = 16384
+        Ngl = 32
+        Threads = 12
+        FlashAttn = "on"
+        Speed = "5-6 tok/s"
+    }
+    "5" = @{
+        Name = "XXL Context"
+        Description = "32K token context for very long documents"
+        Context = 32768
+        Ngl = 20
+        Threads = 12
+        FlashAttn = "on"
+        Speed = "2-3 tok/s"
+    }
 }
 
 function Ensure-StateDir {
