@@ -539,6 +539,14 @@ function Start-Shard([string]$profileId) {
     Write-Host "shard: logs"
     Write-Host "  stdout: $stdoutLog"
     Write-Host "  stderr: $stderrLog"
+
+    # Auto-update OpenCode config if it exists
+    $ocConfig = Join-Path $env:USERPROFILE ".config\opencode\opencode.jsonc"
+    if (Test-Path $ocConfig) {
+        $ctxK = [int]($profile.Context / 1024)
+        Update-OpenCodeConfig -Silent -profileId $profileId
+        Write-Host "shard: updated OpenCode config (${ctxK}K context)"
+    }
 }
 
 # ── Display Functions ──────────────────────────────────────────────────────────
@@ -686,6 +694,7 @@ function Show-Usage {
     Write-Host "  shard recalc <id>  benchmark a specific model (e.g. shard recalc 9B)"
     Write-Host "  shard reset        remove profile overrides and return to defaults"
     Write-Host "  shard update       update llama.cpp runtime to latest"
+    Write-Host "  shard opencode     setup/update OpenCode config for local shard"
     Write-Host "  shard help         show this message"
 }
 
@@ -1188,6 +1197,13 @@ function Recalculate-ModelProfiles {
     }
     Write-Host ""
     Write-Host "  Saved to: $profileOverrideFile"
+
+    # Auto-update OpenCode config if it exists
+    $ocConfig = Join-Path $env:USERPROFILE ".config\opencode\opencode.jsonc"
+    if (Test-Path $ocConfig) {
+        Update-OpenCodeConfig -Silent
+        Write-Host "  Updated OpenCode config: $ocConfig"
+    }
 }
 
 function Recalculate-Profiles {
@@ -1281,6 +1297,153 @@ function Recalculate-Profiles {
         Write-Host ("shard: restarting previously running profile {0}" -f $resumeProfileId)
         Start-Shard -profileId $resumeProfileId
     }
+}
+
+# ── OpenCode Integration ───────────────────────────────────────────────────────
+
+function Update-OpenCodeConfig {
+    param([switch]$Silent, [string]$profileId)
+
+    $activeModelId = Get-ActiveModelId
+    $catalog = $ModelCatalog[$activeModelId]
+    if (-not $catalog) {
+        if (-not $Silent) { Write-Host "shard: no active model found" }
+        return $false
+    }
+
+    $modelProfiles = Load-Profiles -modelId $activeModelId
+    if (-not $profileId) { $profileId = "1" }
+    $selectedProfile = $modelProfiles[$profileId]
+    if (-not $selectedProfile) { $selectedProfile = $modelProfiles["1"] }
+    $contextLimit = [int]$selectedProfile.Context
+    $speed = $selectedProfile.Speed
+
+    # Model key for the OpenCode config (sent as model id to llama-server, which ignores it)
+    $modelKey = ($catalog.Name).ToLower() -replace '\s+', '-'
+    $displayName = "$($catalog.FullName) (local)"
+    if ($speed -and $speed -ne "not calibrated") {
+        $ctxK = [int]($contextLimit / 1024)
+        $displayName += " - ${ctxK}K ctx, $speed"
+    }
+
+    $configDir = Join-Path $env:USERPROFILE ".config\opencode"
+    $configFile = Join-Path $configDir "opencode.jsonc"
+
+    # Load existing config or start fresh
+    $config = $null
+    if (Test-Path $configFile) {
+        try {
+            $raw = Get-Content -Raw -Path $configFile
+            # Strip single-line // comments for parsing
+            $stripped = ($raw -split "`r?`n" | ForEach-Object { $_ -replace '^\s*//.*$', '' -replace '\s//\s.*$', '' }) -join "`n"
+            $config = $stripped | ConvertFrom-Json -AsHashtable
+        } catch {
+            if (-not $Silent) {
+                Write-Host "  Warning: could not parse existing opencode.jsonc, creating backup"
+            }
+            Copy-Item $configFile "$configFile.bak" -Force
+            $config = $null
+        }
+    }
+
+    if (-not $config) {
+        $config = [ordered]@{
+            '$schema' = "https://opencode.ai/config.json"
+        }
+    }
+
+    if (-not $config.Contains("provider")) {
+        $config["provider"] = @{}
+    }
+
+    $config["provider"]["shard"] = [ordered]@{
+        npm     = "@ai-sdk/openai-compatible"
+        name    = "Shard (local)"
+        options = [ordered]@{
+            baseURL = "http://127.0.0.1:8080/v1"
+        }
+        models = [ordered]@{
+            $modelKey = [ordered]@{
+                name  = $displayName
+                limit = [ordered]@{
+                    context = $contextLimit
+                    output  = $contextLimit
+                }
+            }
+        }
+    }
+
+    if (-not (Test-Path $configDir)) {
+        New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+    }
+
+    $json = $config | ConvertTo-Json -Depth 8
+    Set-Content -Path $configFile -Value $json -Encoding UTF8
+
+    if (-not $Silent) {
+        Write-Host "  Updated: $configFile"
+        Write-Host "  Provider: shard (local llama-server on http://127.0.0.1:8080)"
+        Write-Host "  Model: $($catalog.Name) - context: $contextLimit, output: $contextLimit"
+        if ($speed -and $speed -ne "not calibrated") {
+            Write-Host "  Speed: $speed"
+        }
+    }
+    return $true
+}
+
+function Setup-OpenCode {
+    Write-Host ''
+    Write-Host '  OPENCODE SETUP'
+    Write-Host '  =============='
+    Write-Host ''
+
+    # Check if opencode is installed
+    $oc = Get-Command opencode -ErrorAction SilentlyContinue
+    if (-not $oc) {
+        $npm = Get-Command npm -ErrorAction SilentlyContinue
+        if (-not $npm) {
+            Write-Host "  opencode is not installed and npm was not found."
+            Write-Host "  Install Node.js from https://nodejs.org then run:"
+            Write-Host "    npm i -g opencode-ai"
+            Write-Host ''
+        } else {
+            Write-Host "  opencode is not installed."
+            $ans = Read-Host "  Install now via 'npm i -g opencode-ai'? (y/n)"
+            if ($ans -match '^[yY]') {
+                Write-Host '  Installing opencode-ai...'
+                $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+                & npm i -g opencode-ai 2>&1 | ForEach-Object { Write-Host "    $_" }
+                $ErrorActionPreference = $prevEAP
+                $oc = Get-Command opencode -ErrorAction SilentlyContinue
+                if ($oc) {
+                    Write-Host '  opencode installed successfully.'
+                } else {
+                    Write-Host '  Installation may have failed. Try manually: npm i -g opencode-ai'
+                }
+                Write-Host ''
+            } else {
+                Write-Host '  Skipping install. You can install later with: npm i -g opencode-ai'
+                Write-Host ''
+            }
+        }
+    } else {
+        Write-Host "  opencode found: $($oc.Source)"
+        Write-Host ''
+    }
+
+    # Generate/update the config
+    $result = Update-OpenCodeConfig
+    Write-Host ''
+
+    if ($result) {
+        Write-Host '  To use with shard:'
+        Write-Host '    1. shard           # start the server'
+        Write-Host '    2. opencode        # launch OpenCode TUI'
+        Write-Host '    3. /models         # select the shard model inside OpenCode'
+        Write-Host ''
+        Write-Host '  The config auto-updates after every "shard recalc".'
+    }
+    Write-Host ''
 }
 
 # ── Model Management Commands ──────────────────────────────────────────────────
@@ -1719,6 +1882,9 @@ switch ($cmd) {
     }
     "update" {
         Update-Shard
+    }
+    "opencode" {
+        Setup-OpenCode
     }
     "recalc" {
         $recalcArgs = @()
