@@ -331,6 +331,7 @@ function Show-Usage {
     Write-Host "  ortega stop       stop running server"
     Write-Host "  ortega status     show running status"
     Write-Host "  ortega info       show resolved runtime/model paths"
+    Write-Host "  ortega update     update llama.cpp runtime + model to latest"
     Write-Host "  ortega recalc     benchmark this hardware and recalculate profiles"
     Write-Host "  ortega reset      remove profile overrides and return to defaults"
 }
@@ -539,6 +540,37 @@ function Reset-Profiles {
     }
 }
 
+function Update-Ortega {
+    $installScript = Join-Path $repoRoot "scripts\install-ortega.ps1"
+    if (-not (Test-Path $installScript)) {
+        throw "install script not found: $installScript"
+    }
+
+    $resumeProfileId = $null
+    $running = Get-RunningProcessFromState
+    if ($null -ne $running) {
+        $runningState = Get-ServerState
+        $resumeProfileId = $runningState.ProfileId
+        Write-Host ("ortega: stopping running server (profile {0}) before update" -f $resumeProfileId)
+        Stop-Ortega
+        Start-Sleep -Seconds 1
+    }
+
+    Write-Host "ortega: updating llama.cpp runtime and model to latest supported assets..."
+    & $installScript -Force
+    if ($LASTEXITCODE -ne 0) {
+        throw "ortega: update failed"
+    }
+
+    if ($resumeProfileId) {
+        $profiles = Load-Profiles
+        Write-Host ("ortega: restarting previously running profile {0}" -f $resumeProfileId)
+        Start-Ortega -profileId $resumeProfileId
+    }
+
+    Write-Host "ortega: update complete"
+}
+
 $profiles = Load-Profiles
 
 if ($CommandArgs.Count -eq 0) {
@@ -563,6 +595,9 @@ switch ($cmd) {
     }
     "info" {
         Show-Info
+    }
+    "update" {
+        Update-Ortega
     }
     "recalc" {
         Recalculate-Profiles

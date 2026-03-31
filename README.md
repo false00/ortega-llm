@@ -40,7 +40,7 @@ From repo root:
 
 What install does:
 - Detects local NVIDIA CUDA capability (if available)
-- Downloads a compatible llama.cpp runtime build (CUDA when possible, CPU fallback)
+- Downloads the latest llama.cpp release runtime by default (CUDA when possible, CPU fallback)
 - Downloads the default model used in this repo docs:
   - `Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf`
 - Creates command wrapper: `C:\Users\<you>\bin\ortega.cmd`
@@ -60,7 +60,10 @@ Optional installer flags:
 # Skip model download
 .\scripts\install-ortega.ps1 -SkipModelDownload
 
-# Pin a specific llama.cpp release tag
+# Force re-download model (for refresh/update)
+.\scripts\install-ortega.ps1 -Force
+
+# Pin a specific llama.cpp release tag (optional; latest is default)
 .\scripts\install-ortega.ps1 -LlamaCppTag b8589
 ```
 
@@ -89,6 +92,10 @@ Optional installer flags:
 
 - `ortega info`
   - Shows resolved runtime and model paths (with env var overrides)
+
+- `ortega update`
+  - Updates llama.cpp runtime and model using latest defaults
+  - If a server is running, it is stopped for update and restarted afterwards
 
 - `ortega recalc`
   - Re-benchmarks this machine and recalculates profile values automatically

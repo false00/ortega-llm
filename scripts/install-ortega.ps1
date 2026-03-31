@@ -1,7 +1,8 @@
 param(
     [switch]$SkipRuntimeDownload,
     [switch]$SkipModelDownload,
-    [string]$LlamaCppTag = "b8589",
+    [string]$LlamaCppTag,
+    [switch]$Force,
     [string]$ModelRepo = "mradermacher/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF",
     [string]$ModelFile = "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf"
 )
@@ -55,6 +56,25 @@ function Resolve-CudaVariant {
     } catch {
         return "12.4"
     }
+}
+
+function Resolve-LlamaCppTag {
+    param([string]$requestedTag)
+
+    if (-not [string]::IsNullOrWhiteSpace($requestedTag)) {
+        return $requestedTag
+    }
+
+    try {
+        $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest"
+        if ($latest.tag_name) {
+            return [string]$latest.tag_name
+        }
+    } catch {
+        Write-Host "Warning: could not query latest llama.cpp release tag. Falling back to b8589."
+    }
+
+    return "b8589"
 }
 
 function Install-LlamaRuntime {
@@ -115,16 +135,21 @@ function Install-LlamaRuntime {
 function Install-Model {
     param(
         [string]$repo,
-        [string]$file
+        [string]$file,
+        [bool]$forceDownload
     )
 
     $modelsDir = Join-Path $repoRoot "models"
     Ensure-Dir $modelsDir
 
     $outPath = Join-Path $modelsDir $file
-    if (Test-Path $outPath) {
+    if ((Test-Path $outPath) -and -not $forceDownload) {
         Write-Host "Model already exists, skipping download: $outPath"
         return
+    }
+
+    if ((Test-Path $outPath) -and $forceDownload) {
+        Write-Host "Force enabled: re-downloading model to: $outPath"
     }
 
     $url = "https://huggingface.co/$repo/resolve/main/$file?download=true"
@@ -182,14 +207,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
     Write-Host "ORTEGA_HOME: $repoRoot"
 }
 
+$resolvedTag = Resolve-LlamaCppTag -requestedTag $LlamaCppTag
+Write-Host "Using llama.cpp release tag: $resolvedTag"
+
 if (-not $SkipRuntimeDownload) {
-    Install-LlamaRuntime -tag $LlamaCppTag
+    Install-LlamaRuntime -tag $resolvedTag
 } else {
     Write-Host "Skipping runtime download (--SkipRuntimeDownload)"
 }
 
 if (-not $SkipModelDownload) {
-    Install-Model -repo $ModelRepo -file $ModelFile
+    Install-Model -repo $ModelRepo -file $ModelFile -forceDownload:$Force
 } else {
     Write-Host "Skipping model download (--SkipModelDownload)"
 }
