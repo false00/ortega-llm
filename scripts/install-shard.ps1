@@ -24,12 +24,35 @@ function Ensure-Dir([string]$path) {
 
 function Invoke-Download([string]$url, [string]$outFile) {
     Write-Host "Downloading: $url"
-    $prevProgress = $ProgressPreference
+    $tmpFile = "$outFile.tmp"
     try {
-        $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing
-    } finally {
-        $ProgressPreference = $prevProgress
+        $response = [System.Net.HttpWebRequest]::Create($url).GetResponse()
+        $totalBytes = $response.ContentLength
+        $stream = $response.GetResponseStream()
+        $fileStream = [System.IO.File]::Create($tmpFile)
+        $buffer = New-Object byte[] (8 * 1024 * 1024)
+        $downloaded = 0
+        $lastPct = -1
+        while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+            $fileStream.Write($buffer, 0, $read)
+            $downloaded += $read
+            if ($totalBytes -gt 0) {
+                $pct = [int]([Math]::Floor($downloaded * 100 / $totalBytes))
+                if ($pct -ne $lastPct -and $pct % 5 -eq 0) {
+                    $dlMB = [Math]::Round($downloaded / 1MB, 0)
+                    $totMB = [Math]::Round($totalBytes / 1MB, 0)
+                    Write-Host "  ${pct}% (${dlMB} / ${totMB} MB)"
+                    $lastPct = $pct
+                }
+            }
+        }
+        $fileStream.Close()
+        $stream.Close()
+        $response.Close()
+        Move-Item -Path $tmpFile -Destination $outFile -Force
+    } catch {
+        if (Test-Path $tmpFile) { Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue }
+        throw
     }
 }
 
