@@ -259,6 +259,47 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8080/v1/chat/completions" -Method Post 
 4. If memory fit fails, move to profile #2.
 5. Only use profile #3 when you really need longer context.
 
+## Using with OpenCode (open-source Cursor alternative)
+
+You can use the local API endpoint with [OpenCode](https://opencode.ai/), an open-source IDE assistant platform.
+
+### Setup
+
+1. Install OpenCode and create or open your `opencode.json` config file.
+
+2. Add this configuration block to your `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "local-llama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Local llama.cpp",
+      "options": {
+        "baseURL": "http://127.0.0.1:8080/v1"
+      },
+      "models": {
+        "qwen-distilled": {
+          "name": "Qwen 3.5 Claude Distilled"
+        }
+      }
+    }
+  },
+  "model": "local-llama/qwen-distilled"
+}
+```
+
+3. Make sure the `ortega` server is running before using OpenCode.
+
+4. Restart OpenCode after saving the config.
+
+### Notes
+
+- The config assumes the server is running on the default `http://127.0.0.1:8080/v1` endpoint.
+- Use `ortega status` to verify the server is running and see the current API endpoint.
+- If you change profiles or the port, update the `baseURL` accordingly.
+
 ## CLI Usage (No API Server)
 
 Use this when you want to run everything directly from terminal.
