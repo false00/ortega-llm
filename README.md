@@ -1,8 +1,8 @@
 # Shard
 
-**Run a 27B reasoning model locally. One command. Auto-tuned to your hardware.**
+**Run Qwen3.5 reasoning models locally. One command. Auto-tuned to your hardware.**
 
-Shard wraps [Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled](https://huggingface.co/Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF) with a zero-config launcher that detects your GPU, benchmarks your system, and picks the fastest settings automatically. No YAML files. No guessing `-ngl` values. Just `shard`.
+Shard wraps the [Qwen3.5-Claude-4.6-Opus-Reasoning-Distilled](https://huggingface.co/collections/Jackrong/qwen35-claude-46-opus-reasoning-distilled) model family with a zero-config launcher that detects your GPU, benchmarks your system, and picks the fastest settings automatically. No YAML files. No guessing `-ngl` values. Just `shard`.
 
 ---
 
@@ -10,20 +10,39 @@ Shard wraps [Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled](https://huggingfac
 
 | | |
 |---|---|
+| **Multi-model support** | 5 model sizes from 0.8B to 27B — pick what fits your hardware |
 | **One-command install** | Downloads llama.cpp + model + creates the `shard` command globally |
 | **Auto hardware detection** | Detects your GPU, VRAM, CPU cores, CUDA version |
 | **Auto-tuning** | Benchmarks your specific machine and generates optimized profiles |
 | **5 built-in profiles** | From fast daily chat (4K context) to deep reasoning (32K context) |
+| **Per-model profiles** | Each model gets its own tuned profiles — recalc one, many, or all |
+| **Smart quant picker** | Detects your VRAM/RAM and recommends the best quantization per model |
 | **OpenAI-compatible API** | Drop-in replacement at `localhost:8080/v1` for any app that speaks OpenAI |
 | **Hot profile switching** | Switch context/speed profiles without manual restarts |
 | **Works on any NVIDIA GPU** | CUDA auto-detected; CPU fallback if no GPU |
 
 ---
 
+## Available Models
+
+All models from the [Qwen3.5-Claude-4.6-Opus-Reasoning-Distilled collection](https://huggingface.co/collections/Jackrong/qwen35-claude-46-opus-reasoning-distilled):
+
+| Size | Model | Q4_K_M | Best For |
+|-----:|-------|-------:|----------|
+| 27B | Qwen3.5-27B | 16.5 GB | Maximum quality — coding agents, deep reasoning |
+| 9B | Qwen3.5-9B | 5.6 GB | Great balance of quality and speed |
+| 4B | Qwen3.5-4B | 2.7 GB | Fast general use, fits most GPUs |
+| 2B | Qwen3.5-2B | 1.3 GB | Lightweight, very fast |
+| 0.8B | Qwen3.5-0.8B | 527 MB | Minimal — testing, embedded, CPU-only |
+
+Multiple quantization levels available per model (Q2_K through Q8_0). During install and download, Shard detects your VRAM and RAM and recommends the best quant for each model — quants that won't fit are flagged so you don't waste disk space.
+
+---
+
 ## Quick Start
 
 ```powershell
-# 1. Install (downloads runtime + model, creates global 'shard' command)
+# 1. Install (downloads runtime + lets you choose which model(s) to download)
 .\scripts\install-shard.ps1
 
 # 2. Open a new terminal, then detect your hardware
@@ -43,6 +62,9 @@ shard stop       # stop the server
 shard 2          # switch to a different profile
 shard ls         # see all profiles with speeds
 shard status     # check what's running
+shard model 9B   # switch to a different model
+shard download   # get more models (shows recommended quants for your hardware)
+shard check      # check HuggingFace for new models
 ```
 
 ---
@@ -70,9 +92,18 @@ Runs `llama-bench` and `llama-completion` across multiple GPU layer offload valu
 
 1. **Detects your VRAM** and filters out ngl values that clearly won't fit
 2. Sweeps `-ngl` candidates at 4K context to find your best speed
-3. **Adaptively narrows** candidates for 8K, 16K, and 32K — each phase starts from the previous phase's proven max ngl and works downward, so no VRAM is left on the table and no time is wasted testing values that can't fit
+3. **Adaptively narrows** candidates for 8K, 16K, and 32K
 4. Calculates optimal thread count from your CPU
-5. Saves everything to `.shard/profiles.json`
+5. Saves everything to `.shard/profiles.json` under the model's key
+
+Recalc supports targeting specific models:
+
+```powershell
+shard recalc          # recalc active model
+shard recalc 9B       # recalc a specific model
+shard recalc 27B,9B   # recalc multiple models
+shard recalc all      # recalc all installed models
+```
 
 After recalc, every profile is tuned to **your** GPU — not someone else's.
 
@@ -86,11 +117,22 @@ After recalc, every profile is tuned to **your** GPU — not someone else's.
 | 4 | XL Context | 16K | Extended reasoning and longer documents |
 | 5 | XXL Context | 32K | Maximum context for very long inputs |
 
-Switch profiles instantly — if a server is running, it auto-restarts with the new settings:
+Each model gets its own set of tuned profiles. Switch profiles instantly — if a server is running, it auto-restarts with the new settings:
 
 ```powershell
 shard 3          # switch to 8K context
 shard 1          # back to fast daily mode
+```
+
+### Model Management
+
+```powershell
+shard model          # show all models and which is active
+shard model 9B       # switch active model to 9B
+shard download       # interactive model download menu
+shard download 4B    # download 4B with default quant (Q4_K_M)
+shard download 4B Q8_0   # download a specific quant
+shard check          # check HuggingFace for available/new models
 ```
 
 ---
@@ -104,17 +146,20 @@ shard 1          # back to fast daily mode
 This will:
 - Detect your NVIDIA CUDA version (falls back to CPU if no GPU)
 - Download the matching llama.cpp release
-- Download the Q4_K_M quantized model (~17 GB)
+- **Prompt you to select which model(s) to download**
 - Create `shard.cmd` in `~/bin` and add it to your PATH
 - Set `SHARD_HOME` environment variable
 
 Optional flags:
 
 ```powershell
-.\scripts\install-shard.ps1 -SkipRuntimeDownload    # already have llama.cpp
-.\scripts\install-shard.ps1 -SkipModelDownload       # already have the model
-.\scripts\install-shard.ps1 -Force                    # re-download model
-.\scripts\install-shard.ps1 -LlamaCppTag b8589        # pin a specific release
+.\scripts\install-shard.ps1 -SkipRuntimeDownload       # already have llama.cpp
+.\scripts\install-shard.ps1 -SkipModelDownload          # already have models
+.\scripts\install-shard.ps1 -Force                       # re-download everything
+.\scripts\install-shard.ps1 -LlamaCppTag b8589           # pin a specific release
+.\scripts\install-shard.ps1 -Models 27B,9B               # download specific models
+.\scripts\install-shard.ps1 -Models all                  # download all models
+.\scripts\install-shard.ps1 -Models 27B -Quant Q8_0      # specific quant
 ```
 
 Open a **new terminal** after install.
@@ -125,16 +170,24 @@ Open a **new terminal** after install.
 
 | Command | What it does |
 |---------|-------------|
-| `shard` | Start profile 1 (daily default) |
+| `shard` | Start active model with profile 1 (daily default) |
 | `shard 1` through `shard 5` | Start/switch to a specific profile |
 | `shard stop` | Stop the running server |
-| `shard ls` | List all profiles with settings and speeds |
+| `shard ls` | List all profiles with settings, speeds, and installed models |
 | `shard status` | Show running profile, PID, and endpoint |
 | `shard info` | Show resolved runtime and model paths |
+| `shard model` | Show available models and which is active |
+| `shard model <id>` | Switch active model (e.g. `shard model 9B`) |
+| `shard download` | Interactive model download with hardware-aware quant recommendations |
+| `shard download <id> [quant]` | Download a specific model |
+| `shard check` | Check HuggingFace for new/updated models |
 | `shard detect` | Show detected system specs |
-| `shard recalc` | Benchmark hardware and auto-tune all profiles |
-| `shard reset` | Remove tuned profiles, return to defaults |
-| `shard update` | Update llama.cpp runtime and model to latest |
+| `shard recalc` | Benchmark active model and auto-tune profiles |
+| `shard recalc all` | Benchmark all installed models |
+| `shard recalc <id>` | Benchmark a specific model |
+| `shard reset` | Remove all profile overrides |
+| `shard reset <id>` | Remove profile overrides for a specific model |
+| `shard update` | Update llama.cpp runtime to latest |
 | `shard help` | Show usage summary |
 
 ---
@@ -212,86 +265,49 @@ For interactive chat:
 
 ---
 
-## Author's Benchmarks
+## Configuration
 
-Tested on: **RTX 4080 (16 GB VRAM) / 64 GB RAM / Windows**
+All state is stored in `.shard/`:
 
-Default profiles ship with these values. Run `shard recalc` to replace them with values tuned for your hardware.
+| File | Purpose |
+|------|---------|
+| `profiles.json` | Per-model tuned profiles + active model selection |
+| `state.json` | Running server info (PID, profile, endpoint) |
+| `server.stdout.log` | Server stdout |
+| `server.stderr.log` | Server stderr (loading info, metrics) |
 
-### Speed by profile
+The `profiles.json` format stores profiles per model:
 
-| Profile | Context | `-ngl` | Measured speed |
-|--------:|--------:|-------:|---------------:|
-| 1 | 4096 | 56 | 13.79–14.1 tok/s |
-| 2 | 4096 | 48 | 9–10 tok/s |
-| 3 | 8192 | 48 | 9.23 tok/s |
-| 4 | 16384 | 32 | 5–6 tok/s (est.) |
-| 5 | 32768 | 20 | 2–3 tok/s (est.) |
-
-### Full `-ngl` sweep (tg64, Q4_K_M)
-
-| ngl | tok/s | notes |
-|----:|------:|-------|
-| 16 | 4.46 | stable |
-| 20 | 4.82 | stable |
-| 24 | 5.03 | stable |
-| 28 | 5.21 | stable |
-| 32 | 5.96 | stable |
-| 36 | 6.49 | stable |
-| 40 | 6.96 | validated |
-| 44 | 8.19 | validated |
-| 48 | 9.53 | validated |
-| **56** | **13.96** | **best stable** |
-| 64 | 1.89–6.53 | inconsistent |
-| 80 | 1.83–6.16 | inconsistent |
-| 99 | 3.90–5.98 | inconsistent |
-
-> High `-ngl` values (64+) were unreliable on this GPU. `shard recalc` finds the sweet spot for yours.
-
-### Reproduce
-
-```powershell
-# Full sweep
-.\tools\llama-b8589-win-cuda\llama-bench.exe -m .\models\Qwen3.5-27B.Q4_K_M.gguf -r 1 --no-warmup -p 256 -n 64 -t 12 -ngl 16,20,24,28,32,36,40,44,48,56,64,80,99 -fa 1 -o md
-
-# Focused validation
-.\tools\llama-b8589-win-cuda\llama-bench.exe -m .\models\Qwen3.5-27B.Q4_K_M.gguf -r 1 --no-warmup -p 256 -n 64 -t 12 -ngl 40,44,48,56,99 -fa 1 -o md
+```json
+{
+  "activeModel": "27B",
+  "models": {
+    "27B": {
+      "1": { "Ngl": 64, "Context": 4096, "Threads": 16, "Speed": "29.11 tok/s", "Name": "Daily Default" },
+      "2": { "Ngl": 56, "Context": 4096, "Threads": 16, "Speed": "15.27 tok/s", "Name": "Stability Fallback" }
+    },
+    "9B": {
+      "1": { "Ngl": 41, "Context": 4096, "Threads": 16, "Speed": "52.3 tok/s", "Name": "Daily Default" }
+    }
+  }
+}
 ```
 
 ---
 
 ## Troubleshooting
 
-| Error | Fix |
-|-------|-----|
-| `invalid argument: -temp` | Use `--temp`, not `-temp` |
-| `failed to fit params to free device memory` | Lower `-ngl` first, then `-c`. Or switch to a higher-numbered profile |
-| Command appears stuck | You're in interactive mode. Use `llama-completion.exe` with `-no-cnv` for one-shot |
-| `llama-bench` rejects `-c` | This build doesn't accept `-c` in bench mode — remove it |
-
----
-
-## Configuration
-
-### Environment variable overrides
-
-| Variable | Purpose |
-|----------|---------|
-| `SHARD_HOME` | Repo root (set by installer) |
-| `SHARD_RUNTIME_EXE` | Force a specific `llama-server.exe` path |
-| `SHARD_MODEL_PATH` | Force a specific `.gguf` model path |
-
-### Logs and state
-
-| File | Purpose |
-|------|---------|
-| `.shard/state.json` | Running server state |
-| `.shard/server.stdout.log` | Server stdout |
-| `.shard/server.stderr.log` | Server stderr |
-| `.shard/profiles.json` | Tuned profiles (after `shard recalc`) |
+| Problem | Fix |
+|---------|-----|
+| `shard` not found | Open a **new** terminal after install |
+| VRAM overflow / fit errors | Switch to a lower profile (`shard 2`) or smaller model (`shard model 4B`) |
+| Slow speeds | Run `shard recalc` to find optimal settings |
+| Model not found | Run `shard download` to get models |
+| Want a different model | Run `shard model` to see options, `shard model 9B` to switch |
+| Check for new models | Run `shard check` |
 
 ---
 
 ## License
 
-This repo provides tooling and configuration only. The model weights are subject to their upstream license. See the [model card](https://huggingface.co/Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF) for details.
+Apache-2.0 — same as the underlying Qwen3.5 models and llama.cpp.
