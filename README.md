@@ -188,6 +188,7 @@ Open a **new terminal** after install.
 | `shard reset` | Remove all profile overrides |
 | `shard reset <id>` | Remove profile overrides for a specific model |
 | `shard update` | Update llama.cpp runtime to latest |
+| `shard opencode` | Setup/update OpenCode config for local shard |
 | `shard help` | Show usage summary |
 
 ---
@@ -220,28 +221,21 @@ Invoke-RestMethod -Uri "http://127.0.0.1:8080/v1/chat/completions" -Method Post 
 
 ### Example: OpenCode
 
-Add to your `opencode.json`:
+Shard can automatically configure [OpenCode](https://opencode.ai/) to use your local server:
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "provider": {
-    "local-llama": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Local llama.cpp",
-      "options": {
-        "baseURL": "http://127.0.0.1:8080/v1"
-      },
-      "models": {
-        "qwen-distilled": {
-          "name": "Qwen 3.5 Claude Distilled"
-        }
-      }
-    }
-  },
-  "model": "local-llama/qwen-distilled"
-}
+```powershell
+shard opencode   # setup config (offers to install opencode if needed)
+shard            # start the server
+opencode         # launch OpenCode, then /models to select shard
 ```
+
+This generates `%USERPROFILE%\.config\opencode\opencode.jsonc` with the correct provider, model, and context limits from your tuned profiles. The config auto-updates when you:
+
+- **Switch profiles** (`shard 3`) — updates context limits to match
+- **Run recalc** (`shard recalc`) — updates with new speed/context values
+- **Run `shard opencode`** again — refreshes everything
+
+Existing providers in your opencode config are preserved — only the `"shard"` provider entry is touched.
 
 Works with any tool that supports OpenAI-compatible endpoints: [Open WebUI](https://github.com/open-webui/open-webui), [Continue.dev](https://continue.dev), [SillyTavern](https://sillytavernai.com/), [OpenCode](https://opencode.ai/), etc.
 
