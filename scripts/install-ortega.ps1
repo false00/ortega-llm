@@ -1,3 +1,11 @@
+param(
+    [switch]$SkipRuntimeDownload,
+    [switch]$SkipModelDownload,
+    [string]$LlamaCppTag = "b8589",
+    [string]$ModelRepo = "mradermacher/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF",
+    [string]$ModelFile = "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf"
+)
+
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -7,47 +15,190 @@ if (-not (Test-Path $launcherScript)) {
     throw "launcher script not found: $launcherScript"
 }
 
-$targetDir = Join-Path $HOME "bin"
-$cmdPath = Join-Path $targetDir "ortega.cmd"
-
-if (-not (Test-Path $targetDir)) {
-    New-Item -ItemType Directory -Path $targetDir | Out-Null
-}
-
-$cmdContent = @"
-@echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "$launcherScript" %*
-"@
-
-Set-Content -Path $cmdPath -Value $cmdContent -Encoding ASCII
-
-$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-if ([string]::IsNullOrWhiteSpace($userPath)) {
-    $userPath = ""
-}
-
-$paths = $userPath -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-$alreadyInPath = $false
-foreach ($p in $paths) {
-    if ($p.TrimEnd("\\") -ieq $targetDir.TrimEnd("\\")) {
-        $alreadyInPath = $true
-        break
+function Ensure-Dir([string]$path) {
+    if (-not (Test-Path $path)) {
+        New-Item -ItemType Directory -Path $path | Out-Null
     }
 }
 
-if (-not $alreadyInPath) {
-    $newPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $targetDir } else { "$userPath;$targetDir" }
-    [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
-    Write-Host "Added to user PATH: $targetDir"
-} else {
-    Write-Host "PATH already contains: $targetDir"
+function Invoke-Download([string]$url, [string]$outFile) {
+    Write-Host "Downloading: $url"
+    Invoke-WebRequest -Uri $url -OutFile $outFile
 }
 
-Write-Host ""
-Write-Host "Installed command: ortega"
-Write-Host "Launcher file: $cmdPath"
+function Get-NvidiaCudaVersion {
+    $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+    if ($null -eq $smi) {
+        return $null
+    }
+
+    $raw = & nvidia-smi 2>$null | Out-String
+    if ($raw -match "CUDA Version:\s*([0-9]+\.[0-9]+)") {
+        return $Matches[1]
+    }
+
+    return $null
+}
+
+function Resolve-CudaVariant {
+    $cuda = Get-NvidiaCudaVersion
+    if ($null -eq $cuda) {
+        return $null
+    }
+
+    try {
+        $v = [version]$cuda
+        if ($v -ge [version]"13.1") {
+            return "13.1"
+        }
+        return "12.4"
+    } catch {
+        return "12.4"
+    }
+}
+
+function Install-LlamaRuntime {
+    param(
+        [string]$tag
+    )
+
+    $toolsDir = Join-Path $repoRoot "tools"
+    Ensure-Dir $toolsDir
+
+    $cudaVariant = Resolve-CudaVariant
+    $runtimeDirName = ""
+
+    if ($cudaVariant) {
+        Write-Host "Detected NVIDIA CUDA runtime version: $cudaVariant"
+        $runtimeDirName = "llama-$tag-win-cuda-$($cudaVariant -replace '\\.', '_')"
+        $runtimeDir = Join-Path $toolsDir $runtimeDirName
+
+        $mainZip = Join-Path $toolsDir "llama-$tag-bin-win-cuda-$cudaVariant-x64.zip"
+        $cudartZip = Join-Path $toolsDir "cudart-llama-bin-win-cuda-$cudaVariant-x64.zip"
+
+        $mainUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$tag/llama-$tag-bin-win-cuda-$cudaVariant-x64.zip"
+        $cudartUrl = "https://github.com/ggml-org/llama.cpp/releases/download/$tag/cudart-llama-bin-win-cuda-$cudaVariant-x64.zip"
+
+        Invoke-Download -url $mainUrl -outFile $mainZip
+        Invoke-Download -url $cudartUrl -outFile $cudartZip
+
+        if (Test-Path $runtimeDir) {
+            Remove-Item -Path $runtimeDir -Recurse -Force
+        }
+        Ensure-Dir $runtimeDir
+
+        Expand-Archive -Path $mainZip -DestinationPath $runtimeDir -Force
+        Expand-Archive -Path $cudartZip -DestinationPath $runtimeDir -Force
+
+        Write-Host "Installed CUDA runtime to: $runtimeDir"
+    } else {
+        Write-Host "No NVIDIA CUDA detected. Installing CPU llama.cpp runtime."
+
+        $runtimeDirName = "llama-$tag-win-cpu"
+        $runtimeDir = Join-Path $toolsDir $runtimeDirName
+        $zipPath = Join-Path $toolsDir "llama-$tag-bin-win-cpu-x64.zip"
+        $url = "https://github.com/ggml-org/llama.cpp/releases/download/$tag/llama-$tag-bin-win-cpu-x64.zip"
+
+        Invoke-Download -url $url -outFile $zipPath
+
+        if (Test-Path $runtimeDir) {
+            Remove-Item -Path $runtimeDir -Recurse -Force
+        }
+        Ensure-Dir $runtimeDir
+
+        Expand-Archive -Path $zipPath -DestinationPath $runtimeDir -Force
+
+        Write-Host "Installed CPU runtime to: $runtimeDir"
+    }
+}
+
+function Install-Model {
+    param(
+        [string]$repo,
+        [string]$file
+    )
+
+    $modelsDir = Join-Path $repoRoot "models"
+    Ensure-Dir $modelsDir
+
+    $outPath = Join-Path $modelsDir $file
+    if (Test-Path $outPath) {
+        Write-Host "Model already exists, skipping download: $outPath"
+        return
+    }
+
+    $url = "https://huggingface.co/$repo/resolve/main/$file?download=true"
+    Invoke-Download -url $url -outFile $outPath
+    Write-Host "Downloaded model to: $outPath"
+}
+
+function Install-OrtegaCommand {
+    $targetDir = Join-Path $HOME "bin"
+    $cmdPath = Join-Path $targetDir "ortega.cmd"
+
+        [Environment]::SetEnvironmentVariable("ORTEGA_HOME", $repoRoot, "User")
+        $env:ORTEGA_HOME = $repoRoot
+
+    Ensure-Dir $targetDir
+
+    $cmdContent = @"
+@echo off
+set "SCRIPT=%ORTEGA_HOME%\scripts\ortega.ps1"
+if not exist "%SCRIPT%" (
+    echo ortega: script not found at %SCRIPT%
+    echo Hint: run install-ortega.ps1 again from your repo clone.
+    exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
+"@
+
+    Set-Content -Path $cmdPath -Value $cmdContent -Encoding ASCII
+
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ([string]::IsNullOrWhiteSpace($userPath)) {
+        $userPath = ""
+    }
+
+    $paths = $userPath -split ";" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $alreadyInPath = $false
+    foreach ($p in $paths) {
+        if ($p.TrimEnd("\\") -ieq $targetDir.TrimEnd("\\")) {
+            $alreadyInPath = $true
+            break
+        }
+    }
+
+    if (-not $alreadyInPath) {
+        $newPath = if ([string]::IsNullOrWhiteSpace($userPath)) { $targetDir } else { "$userPath;$targetDir" }
+        [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+        Write-Host "Added to user PATH: $targetDir"
+    } else {
+        Write-Host "PATH already contains: $targetDir"
+    }
+
+    Write-Host ""
+    Write-Host "Installed command: ortega"
+    Write-Host "Launcher file: $cmdPath"
+    Write-Host "ORTEGA_HOME: $repoRoot"
+}
+
+if (-not $SkipRuntimeDownload) {
+    Install-LlamaRuntime -tag $LlamaCppTag
+} else {
+    Write-Host "Skipping runtime download (--SkipRuntimeDownload)"
+}
+
+if (-not $SkipModelDownload) {
+    Install-Model -repo $ModelRepo -file $ModelFile
+} else {
+    Write-Host "Skipping model download (--SkipModelDownload)"
+}
+
+Install-OrtegaCommand
+
 Write-Host ""
 Write-Host "Open a NEW terminal, then run:"
+Write-Host "  ortega info"
 Write-Host "  ortega ls"
 Write-Host "  ortega"
 Write-Host "  ortega 2"

@@ -39,10 +39,30 @@ From repo root:
 ```
 
 What install does:
+- Detects local NVIDIA CUDA capability (if available)
+- Downloads a compatible llama.cpp runtime build (CUDA when possible, CPU fallback)
+- Downloads the default model used in this repo docs:
+  - `Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf`
 - Creates command wrapper: `C:\Users\<you>\bin\ortega.cmd`
+- Sets user env var `ORTEGA_HOME` to your repo clone path
 - Adds `C:\Users\<you>\bin` to your user PATH (if missing)
 
 After install, open a new terminal.
+
+If you move the repo folder later, re-run install so `ORTEGA_HOME` is updated.
+
+Optional installer flags:
+
+```powershell
+# Skip runtime download
+.\scripts\install-ortega.ps1 -SkipRuntimeDownload
+
+# Skip model download
+.\scripts\install-ortega.ps1 -SkipModelDownload
+
+# Pin a specific llama.cpp release tag
+.\scripts\install-ortega.ps1 -LlamaCppTag b8589
+```
 
 ### Commands
 
@@ -67,6 +87,16 @@ After install, open a new terminal.
 - `ortega status`
   - Shows current running profile, PID, and endpoint
 
+- `ortega info`
+  - Shows resolved runtime and model paths (with env var overrides)
+
+- `ortega recalc`
+  - Re-benchmarks this machine and recalculates profile values automatically
+  - Saves tuned profile overrides to `.ortega/profiles.json`
+
+- `ortega reset`
+  - Deletes `.ortega/profiles.json` and returns to built-in default profiles
+
 ### Profile behavior
 
 - If you run `ortega 2` while profile 1 is running, it automatically does:
@@ -87,6 +117,32 @@ Runtime state and logs are written to:
 - `.ortega/state.json`
 - `.ortega/server.stdout.log`
 - `.ortega/server.stderr.log`
+- `.ortega/profiles.json` (only after `ortega recalc`)
+
+Path override environment variables:
+- `ORTEGA_RUNTIME_EXE` to force a specific `llama-server.exe`
+- `ORTEGA_MODEL_PATH` to force a specific `.gguf` model
+
+### Recalculate profiles for your hardware
+
+Run this when you want profile values tuned for your specific GPU/CPU:
+
+```powershell
+ortega recalc
+```
+
+What it does:
+1. Runs `llama-bench` across multiple `-ngl` candidates for 4096 context
+2. Finds the best and fallback values for profile 1 and profile 2
+3. Runs 8192 context probes with `llama-completion` to find a working fast profile 3
+4. Saves updated profile values to `.ortega/profiles.json`
+5. If a server is currently running, it stops it during calibration and then starts it again
+
+To return to stock defaults:
+
+```powershell
+ortega reset
+```
 
 ## Daily Use (Simple Workflow)
 

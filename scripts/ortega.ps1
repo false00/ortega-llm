@@ -6,14 +6,14 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$runtimeExe = Join-Path $repoRoot "tools\llama-b8589-win-cuda\llama-server.exe"
-$modelPath = Join-Path $repoRoot "models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf"
+$preferredModelName = "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf"
 $stateDir = Join-Path $repoRoot ".ortega"
 $stateFile = Join-Path $stateDir "state.json"
+$profileOverrideFile = Join-Path $stateDir "profiles.json"
 $stdoutLog = Join-Path $stateDir "server.stdout.log"
 $stderrLog = Join-Path $stateDir "server.stderr.log"
 
-$profiles = [ordered]@{
+$defaultProfiles = [ordered]@{
     "1" = @{
         Name = "Daily Default"
         Description = "Best overall for normal daily use"
@@ -74,11 +74,7 @@ function Clear-ServerState {
 
 function Get-RunningProcessFromState {
     $state = Get-ServerState
-    if ($null -eq $state) {
-        return $null
-    }
-
-    if ($null -eq $state.Pid) {
+    if ($null -eq $state -or $null -eq $state.Pid) {
         return $null
     }
 
@@ -89,6 +85,130 @@ function Get-RunningProcessFromState {
     }
 
     return $p
+}
+
+function Resolve-RuntimeExe {
+    if ($env:ORTEGA_RUNTIME_EXE -and (Test-Path $env:ORTEGA_RUNTIME_EXE)) {
+        return $env:ORTEGA_RUNTIME_EXE
+    }
+
+    $toolsDir = Join-Path $repoRoot "tools"
+    if (-not (Test-Path $toolsDir)) {
+        return $null
+    }
+
+    $serverExes = Get-ChildItem -Path $toolsDir -Recurse -File -Filter "llama-server.exe" -ErrorAction SilentlyContinue
+    if ($null -eq $serverExes -or $serverExes.Count -eq 0) {
+        return $null
+    }
+
+    $preferred = $serverExes |
+        Sort-Object @{Expression = { if ($_.FullName -match "cuda") { 0 } else { 1 } }}, @{Expression = { $_.LastWriteTime }; Descending = $true } |
+        Select-Object -First 1
+
+    return $preferred.FullName
+}
+
+function Resolve-CompletionExe {
+    param([string]$runtimeExe)
+
+    if (-not $runtimeExe) {
+        return $null
+    }
+
+    $dir = Split-Path -Parent $runtimeExe
+    $candidate = Join-Path $dir "llama-completion.exe"
+    if (Test-Path $candidate) {
+        return $candidate
+    }
+
+    return $null
+}
+
+function Resolve-BenchExe {
+    param([string]$runtimeExe)
+
+    if (-not $runtimeExe) {
+        return $null
+    }
+
+    $dir = Split-Path -Parent $runtimeExe
+    $candidate = Join-Path $dir "llama-bench.exe"
+    if (Test-Path $candidate) {
+        return $candidate
+    }
+
+    return $null
+}
+
+function Resolve-ModelPath {
+    if ($env:ORTEGA_MODEL_PATH -and (Test-Path $env:ORTEGA_MODEL_PATH)) {
+        return $env:ORTEGA_MODEL_PATH
+    }
+
+    $modelsDir = Join-Path $repoRoot "models"
+    if (-not (Test-Path $modelsDir)) {
+        return $null
+    }
+
+    $preferred = Join-Path $modelsDir $preferredModelName
+    if (Test-Path $preferred) {
+        return $preferred
+    }
+
+    $ggufs = Get-ChildItem -Path $modelsDir -File -Filter "*.gguf" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending
+    if ($null -eq $ggufs -or $ggufs.Count -eq 0) {
+        return $null
+    }
+
+    return $ggufs[0].FullName
+}
+
+function Load-Profiles {
+    $profiles = [ordered]@{}
+
+    foreach ($id in $defaultProfiles.Keys) {
+        $profiles[$id] = @{
+            Name = $defaultProfiles[$id].Name
+            Description = $defaultProfiles[$id].Description
+            Context = [int]$defaultProfiles[$id].Context
+            Ngl = [int]$defaultProfiles[$id].Ngl
+            Threads = [int]$defaultProfiles[$id].Threads
+            FlashAttn = $defaultProfiles[$id].FlashAttn
+            Speed = $defaultProfiles[$id].Speed
+        }
+    }
+
+    if (-not (Test-Path $profileOverrideFile)) {
+        return $profiles
+    }
+
+    try {
+        $override = Get-Content -Raw -Path $profileOverrideFile | ConvertFrom-Json -AsHashtable
+        foreach ($id in $override.Keys) {
+            if (-not $profiles.Contains($id)) {
+                continue
+            }
+
+            foreach ($k in $override[$id].Keys) {
+                $profiles[$id][$k] = $override[$id][$k]
+            }
+
+            $profiles[$id].Context = [int]$profiles[$id].Context
+            $profiles[$id].Ngl = [int]$profiles[$id].Ngl
+            $profiles[$id].Threads = [int]$profiles[$id].Threads
+        }
+    } catch {
+        Write-Host "ortega: warning: could not parse profile overrides, using defaults"
+    }
+
+    return $profiles
+}
+
+function Save-Profiles($profilesToSave) {
+    Ensure-StateDir
+    ($profilesToSave | ConvertTo-Json -Depth 8) | Set-Content -Path $profileOverrideFile -Encoding UTF8
 }
 
 function Stop-Ortega {
@@ -104,11 +224,14 @@ function Stop-Ortega {
 }
 
 function Start-Ortega([string]$profileId) {
-    if (-not (Test-Path $runtimeExe)) {
-        throw "llama-server not found: $runtimeExe"
+    $runtimeExe = Resolve-RuntimeExe
+    $modelPath = Resolve-ModelPath
+
+    if (-not $runtimeExe -or -not (Test-Path $runtimeExe)) {
+        throw "llama-server not found. Run .\\scripts\\install-ortega.ps1 to bootstrap runtime assets."
     }
-    if (-not (Test-Path $modelPath)) {
-        throw "model not found: $modelPath"
+    if (-not $modelPath -or -not (Test-Path $modelPath)) {
+        throw "GGUF model not found. Run .\\scripts\\install-ortega.ps1 to download the default model."
     }
     if (-not $profiles.Contains($profileId)) {
         throw "invalid profile id: $profileId"
@@ -185,6 +308,11 @@ function Show-Profiles {
         Write-Host ("    speed: {0}" -f $p.Speed)
     }
 
+    if (Test-Path $profileOverrideFile) {
+        Write-Host ""
+        Write-Host ("profile overrides: {0}" -f $profileOverrideFile)
+    }
+
     $running = Get-RunningProcessFromState
     if ($null -ne $running) {
         $state = Get-ServerState
@@ -202,6 +330,9 @@ function Show-Usage {
     Write-Host "  ortega ls         list profiles"
     Write-Host "  ortega stop       stop running server"
     Write-Host "  ortega status     show running status"
+    Write-Host "  ortega info       show resolved runtime/model paths"
+    Write-Host "  ortega recalc     benchmark this hardware and recalculate profiles"
+    Write-Host "  ortega reset      remove profile overrides and return to defaults"
 }
 
 function Show-Status {
@@ -216,6 +347,199 @@ function Show-Status {
     Write-Host ("ortega: PID {0}" -f $running.Id)
     Write-Host ("ortega: endpoint {0}" -f $state.Url)
 }
+
+function Show-Info {
+    $runtimeExe = Resolve-RuntimeExe
+    $modelPath = Resolve-ModelPath
+
+    Write-Host "ortega: resolved paths"
+    Write-Host ("  runtime: {0}" -f ($(if ($runtimeExe) { $runtimeExe } else { "<not found>" })))
+    Write-Host ("  model:   {0}" -f ($(if ($modelPath) { $modelPath } else { "<not found>" })))
+
+    if ($env:ORTEGA_RUNTIME_EXE) {
+        Write-Host ("  ORTEGA_RUNTIME_EXE override: {0}" -f $env:ORTEGA_RUNTIME_EXE)
+    }
+    if ($env:ORTEGA_MODEL_PATH) {
+        Write-Host ("  ORTEGA_MODEL_PATH override:   {0}" -f $env:ORTEGA_MODEL_PATH)
+    }
+}
+
+function Parse-BenchTg64 {
+    param([string]$text)
+
+    $results = @()
+    foreach ($line in ($text -split "`r?`n")) {
+        if ($line -notmatch "\|" -or $line -notmatch "tg64") {
+            continue
+        }
+
+        $parts = $line.Split('|') | ForEach-Object { $_.Trim() }
+        if ($parts.Count -lt 10) {
+            continue
+        }
+
+        $nglText = $parts[5]
+        $test = $parts[8]
+        $tsText = $parts[9]
+
+        if ($test -ne "tg64") {
+            continue
+        }
+
+        $nglMatch = [regex]::Match($nglText, "\d+")
+        $tsMatch = [regex]::Match($tsText, "[0-9]+(\.[0-9]+)?")
+        if (-not $nglMatch.Success -or -not $tsMatch.Success) {
+            continue
+        }
+
+        $results += [pscustomobject]@{
+            Ngl = [int]$nglMatch.Value
+            TokensPerSecond = [double]$tsMatch.Value
+        }
+    }
+
+    return $results
+}
+
+function Measure-8192Candidate {
+    param(
+        [string]$completionExe,
+        [string]$modelPath,
+        [int]$ngl,
+        [int]$threads
+    )
+
+    $out = & $completionExe -m $modelPath -ngl $ngl -c 8192 -n 64 -t $threads -fa on -no-cnv --temp 0.3 --no-warmup -p "Test." 2>&1 | Out-String
+
+    if ($LASTEXITCODE -ne 0 -or $out -match "failed to fit params|error:") {
+        return $null
+    }
+
+    $m = [regex]::Match($out, "eval time\s*=.*?,\s*([0-9]+(\.[0-9]+)?)\s*tokens per second")
+    if (-not $m.Success) {
+        return $null
+    }
+
+    return [double]$m.Groups[1].Value
+}
+
+function Recalculate-Profiles {
+    $runtimeExe = Resolve-RuntimeExe
+    $modelPath = Resolve-ModelPath
+    $benchExe = Resolve-BenchExe -runtimeExe $runtimeExe
+    $completionExe = Resolve-CompletionExe -runtimeExe $runtimeExe
+
+    if (-not $runtimeExe -or -not (Test-Path $runtimeExe)) {
+        throw "llama-server not found. Install runtime first with .\\scripts\\install-ortega.ps1"
+    }
+    if (-not $modelPath -or -not (Test-Path $modelPath)) {
+        throw "model not found. Install model first with .\\scripts\\install-ortega.ps1"
+    }
+    if (-not $benchExe -or -not (Test-Path $benchExe)) {
+        throw "llama-bench.exe not found next to runtime"
+    }
+    if (-not $completionExe -or -not (Test-Path $completionExe)) {
+        throw "llama-completion.exe not found next to runtime"
+    }
+
+    $resumeProfileId = $null
+    $alreadyRunning = Get-RunningProcessFromState
+    if ($null -ne $alreadyRunning) {
+        $runningState = Get-ServerState
+        $resumeProfileId = $runningState.ProfileId
+        Write-Host ("ortega: stopping running server (profile {0}) before calibration" -f $resumeProfileId)
+        Stop-Ortega
+        Start-Sleep -Seconds 1
+    }
+
+    $threads = [Math]::Max(4, [Math]::Min(16, [int][Math]::Floor([Environment]::ProcessorCount / 2)))
+    $candidates4096 = @(32, 40, 44, 48, 56, 64)
+    $candidateArg = ($candidates4096 -join ",")
+
+    Write-Host "ortega: recalc started"
+    Write-Host ("ortega: benchmarking 4096-context candidates: {0}" -f $candidateArg)
+
+    $benchOut = & $benchExe -m $modelPath -r 1 --no-warmup -p 256 -n 64 -t $threads -ngl $candidateArg -fa 1 -o md 2>&1 | Out-String
+    $benchRows = Parse-BenchTg64 -text $benchOut
+
+    if ($benchRows.Count -eq 0) {
+        throw "could not parse benchmark output for 4096 profile"
+    }
+
+    $best4096 = $benchRows | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
+
+    $fallback4096 = $benchRows |
+        Where-Object { $_.Ngl -lt $best4096.Ngl } |
+        Sort-Object TokensPerSecond -Descending |
+        Select-Object -First 1
+
+    if ($null -eq $fallback4096) {
+        $fallback4096 = $best4096
+    }
+
+    Write-Host ("ortega: best 4096 profile => ngl {0}, {1} tok/s" -f $best4096.Ngl, ([Math]::Round($best4096.TokensPerSecond, 2)))
+
+    $candidates8192 = @(56, 48, 44, 40, 32)
+    $results8192 = @()
+
+    Write-Host "ortega: probing 8192-context candidates (this may take a bit)..."
+    foreach ($ngl in $candidates8192) {
+        $speed = Measure-8192Candidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -threads $threads
+        if ($null -eq $speed) {
+            Write-Host ("  ngl {0}: failed" -f $ngl)
+            continue
+        }
+
+        Write-Host ("  ngl {0}: {1} tok/s" -f $ngl, ([Math]::Round($speed, 2)))
+        $results8192 += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+    }
+
+    if ($results8192.Count -eq 0) {
+        throw "all 8192 candidates failed on this hardware"
+    }
+
+    $best8192 = $results8192 | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
+
+    $profiles["1"].Ngl = [int]$best4096.Ngl
+    $profiles["1"].Context = 4096
+    $profiles["1"].Threads = $threads
+    $profiles["1"].Speed = "{0} tok/s" -f ([Math]::Round($best4096.TokensPerSecond, 2))
+
+    $profiles["2"].Ngl = [int]$fallback4096.Ngl
+    $profiles["2"].Context = 4096
+    $profiles["2"].Threads = $threads
+    $profiles["2"].Speed = "{0} tok/s" -f ([Math]::Round($fallback4096.TokensPerSecond, 2))
+
+    $profiles["3"].Ngl = [int]$best8192.Ngl
+    $profiles["3"].Context = 8192
+    $profiles["3"].Threads = $threads
+    $profiles["3"].Speed = "{0} tok/s" -f ([Math]::Round($best8192.TokensPerSecond, 2))
+
+    Save-Profiles -profilesToSave $profiles
+
+    Write-Host ""
+    Write-Host "ortega: recalculation complete"
+    Write-Host ("  profile 1 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["1"].Ngl, $profiles["1"].Context, $profiles["1"].Threads, $profiles["1"].Speed)
+    Write-Host ("  profile 2 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["2"].Ngl, $profiles["2"].Context, $profiles["2"].Threads, $profiles["2"].Speed)
+    Write-Host ("  profile 3 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["3"].Ngl, $profiles["3"].Context, $profiles["3"].Threads, $profiles["3"].Speed)
+    Write-Host ("  overrides saved to: {0}" -f $profileOverrideFile)
+
+    if ($resumeProfileId) {
+        Write-Host ("ortega: restarting previously running profile {0}" -f $resumeProfileId)
+        Start-Ortega -profileId $resumeProfileId
+    }
+}
+
+function Reset-Profiles {
+    if (Test-Path $profileOverrideFile) {
+        Remove-Item -Path $profileOverrideFile -Force
+        Write-Host "ortega: removed profile overrides"
+    } else {
+        Write-Host "ortega: no profile overrides found"
+    }
+}
+
+$profiles = Load-Profiles
 
 if ($CommandArgs.Count -eq 0) {
     Start-Ortega -profileId "1"
@@ -236,6 +560,15 @@ switch ($cmd) {
     }
     "status" {
         Show-Status
+    }
+    "info" {
+        Show-Info
+    }
+    "recalc" {
+        Recalculate-Profiles
+    }
+    "reset" {
+        Reset-Profiles
     }
     "help" {
         Show-Usage
