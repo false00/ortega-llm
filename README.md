@@ -59,7 +59,7 @@ Server is now live at **`http://127.0.0.1:8080/v1`** — compatible with any Ope
 
 ```powershell
 shard stop       # stop the server
-shard 2          # switch to a different profile
+shard 2          # switch to a different profile (1-7)
 shard ls         # see all profiles with speeds
 shard status     # check what's running
 shard model 9B   # switch to a different model
@@ -116,6 +116,9 @@ After recalc, every profile is tuned to **your** GPU — not someone else's.
 | 3 | Long Context | 8K | Larger conversation history |
 | 4 | XL Context | 16K | Extended reasoning and longer documents |
 | 5 | XXL Context | 32K | Maximum context for very long inputs |
+| 6 | Ultra Context | 64K | Massive reasoning chains and deep analysis |
+| 7 | Max Context | 128K | Full document analysis |
+| 8 | Absolute Max | 256K | Full native context window (262K) |
 
 Each model gets its own set of tuned profiles. Switch profiles instantly — if a server is running, it auto-restarts with the new settings:
 
@@ -171,7 +174,7 @@ Open a **new terminal** after install.
 | Command | What it does |
 |---------|-------------|
 | `shard` | Start active model with profile 1 (daily default) |
-| `shard 1` through `shard 5` | Start/switch to a specific profile |
+| `shard 1` through `shard 8` | Start/switch to a specific profile |
 | `shard stop` | Stop the running server |
 | `shard ls` | List all profiles with settings, speeds, and installed models |
 | `shard status` | Show running profile, PID, and endpoint |

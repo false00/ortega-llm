@@ -32,6 +32,7 @@ $ModelCatalog = [ordered]@{
         FilePrefix   = "Qwen3.5-27B"
         Params       = "27B"
         MaxLayers    = 65
+        MaxContext   = 262144
         DefaultQuant = "Q4_K_M"
         Quants = [ordered]@{
             "Q2_K"   = "10.1 GB"
@@ -49,6 +50,7 @@ $ModelCatalog = [ordered]@{
         FilePrefix   = "Qwen3.5-9B"
         Params       = "9B"
         MaxLayers    = 41
+        MaxContext   = 262144
         DefaultQuant = "Q4_K_M"
         Quants = [ordered]@{
             "Q2_K"   = "3.6 GB"
@@ -70,6 +72,7 @@ $ModelCatalog = [ordered]@{
         FilePrefix   = "Qwen3.5-4B"
         Params       = "4B"
         MaxLayers    = 37
+        MaxContext   = 262144
         DefaultQuant = "Q4_K_M"
         Quants = [ordered]@{
             "Q2_K"   = "1.8 GB"
@@ -91,6 +94,7 @@ $ModelCatalog = [ordered]@{
         FilePrefix   = "Qwen3.5-2B"
         Params       = "2B"
         MaxLayers    = 29
+        MaxContext   = 262144
         DefaultQuant = "Q4_K_M"
         Quants = [ordered]@{
             "Q2_K"   = "915 MB"
@@ -112,6 +116,7 @@ $ModelCatalog = [ordered]@{
         FilePrefix   = "Qwen3.5-0.8B"
         Params       = "0.8B"
         MaxLayers    = 25
+        MaxContext   = 262144
         DefaultQuant = "Q4_K_M"
         Quants = [ordered]@{
             "Q2_K"   = "396 MB"
@@ -217,6 +222,33 @@ $defaultProfiles = [ordered]@{
         Description = "32K token context for very long documents"
         Context = 32768
         Ngl = 20
+        Threads = 12
+        FlashAttn = "on"
+        Speed = "not calibrated"
+    }
+    "6" = @{
+        Name = "Ultra Context"
+        Description = "64K token context for massive reasoning chains"
+        Context = 65536
+        Ngl = 12
+        Threads = 12
+        FlashAttn = "on"
+        Speed = "not calibrated"
+    }
+    "7" = @{
+        Name = "Max Context"
+        Description = "128K token context for full document analysis"
+        Context = 131072
+        Ngl = 4
+        Threads = 12
+        FlashAttn = "on"
+        Speed = "not calibrated"
+    }
+    "8" = @{
+        Name = "Absolute Max"
+        Description = "256K token context — full native window"
+        Context = 262144
+        Ngl = 4
         Threads = 12
         FlashAttn = "on"
         Speed = "not calibrated"
@@ -676,7 +708,7 @@ function Show-Info {
 function Show-Usage {
     Write-Host "usage:"
     Write-Host "  shard              start active model with profile 1"
-    Write-Host "  shard 1..5         start/switch to a specific profile"
+    Write-Host "  shard 1..8         start/switch to a specific profile"
     Write-Host "  shard stop         stop running server"
     Write-Host "  shard ls           list profiles and installed models"
     Write-Host "  shard status       show running status"
@@ -988,7 +1020,11 @@ function Recalculate-ModelProfiles {
         $candidates4096 = $allNgl
     }
     $candidateArg = ($candidates4096 -join ",")
+    $maxCtx = if ($catalog.MaxContext) { $catalog.MaxContext } else { 32768 }
     $phaseCount = 4
+    if ($maxCtx -ge 65536)  { $phaseCount = 5 }
+    if ($maxCtx -ge 131072) { $phaseCount = 6 }
+    if ($maxCtx -ge 262144) { $phaseCount = 7 }
     $currentPhase = 1
 
     Write-Host ''
@@ -1145,6 +1181,96 @@ function Recalculate-ModelProfiles {
     }
     Write-Host ""
 
+    # -- Phase 5: 64K context (if model supports it) --
+    $results64k = @()
+    if ($maxCtx -ge 65536) {
+        $currentPhase = 5
+        $anchor64k = if ($results32k.Count -gt 0) { $best32k.Ngl } else { $anchor32k }
+        $candidates64k = @($allNgl | Where-Object { $_ -le $anchor64k } | Sort-Object -Descending)
+        if ($candidates64k.Count -eq 0) { $candidates64k = @(4) }
+
+        $ccount = $candidates64k.Count; $clist = $candidates64k -join ', '
+        Write-Host "[$currentPhase/$phaseCount] VRAM FIT TEST at 64K context"
+        Write-Host "  Candidates: ngl $clist"
+        $cIdx = 0
+        foreach ($ngl in $candidates64k) {
+            $cIdx++
+            $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 65536 -threads $threads -candidateNum $cIdx -candidateTotal $ccount
+            if ($null -ne $speed) {
+                $results64k += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+                break
+            }
+        }
+
+        if ($results64k.Count -gt 0) {
+            $best64k = $results64k | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
+            Write-Host ("  Best 64K: ngl {0} at {1} tok/s" -f $best64k.Ngl, [Math]::Round($best64k.TokensPerSecond, 2))
+        } else {
+            Write-Host '  All 64K candidates failed - keeping defaults'
+        }
+        Write-Host ""
+    }
+
+    # -- Phase 6: 128K context (if model supports it) --
+    $results128k = @()
+    if ($maxCtx -ge 131072) {
+        $currentPhase = 6
+        $anchor128k = if ($results64k.Count -gt 0) { $best64k.Ngl } else { if ($results32k.Count -gt 0) { $best32k.Ngl } else { $anchor32k } }
+        $candidates128k = @($allNgl | Where-Object { $_ -le $anchor128k } | Sort-Object -Descending)
+        if ($candidates128k.Count -eq 0) { $candidates128k = @(4) }
+
+        $ccount = $candidates128k.Count; $clist = $candidates128k -join ', '
+        Write-Host "[$currentPhase/$phaseCount] VRAM FIT TEST at 128K context"
+        Write-Host "  Candidates: ngl $clist"
+        $cIdx = 0
+        foreach ($ngl in $candidates128k) {
+            $cIdx++
+            $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 131072 -threads $threads -candidateNum $cIdx -candidateTotal $ccount
+            if ($null -ne $speed) {
+                $results128k += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+                break
+            }
+        }
+
+        if ($results128k.Count -gt 0) {
+            $best128k = $results128k | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
+            Write-Host ("  Best 128K: ngl {0} at {1} tok/s" -f $best128k.Ngl, [Math]::Round($best128k.TokensPerSecond, 2))
+        } else {
+            Write-Host '  All 128K candidates failed - keeping defaults'
+        }
+        Write-Host ""
+    }
+
+    # -- Phase 7: 256K context (if model supports it) --
+    $results256k = @()
+    if ($maxCtx -ge 262144) {
+        $currentPhase++
+        $anchor256k = if ($results128k.Count -gt 0) { $best128k.Ngl } else { if ($results64k.Count -gt 0) { $best64k.Ngl } else { $anchor128k } }
+        $candidates256k = @($allNgl | Where-Object { $_ -le $anchor256k } | Sort-Object -Descending)
+        if ($candidates256k.Count -eq 0) { $candidates256k = @(4) }
+
+        $ccount = $candidates256k.Count; $clist = $candidates256k -join ', '
+        Write-Host "[$currentPhase/$phaseCount] VRAM FIT TEST at 256K context"
+        Write-Host "  Candidates: ngl $clist"
+        $cIdx = 0
+        foreach ($ngl in $candidates256k) {
+            $cIdx++
+            $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 262144 -threads $threads -candidateNum $cIdx -candidateTotal $ccount
+            if ($null -ne $speed) {
+                $results256k += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+                break
+            }
+        }
+
+        if ($results256k.Count -gt 0) {
+            $best256k = $results256k | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
+            Write-Host ("  Best 256K: ngl {0} at {1} tok/s" -f $best256k.Ngl, [Math]::Round($best256k.TokensPerSecond, 2))
+        } else {
+            Write-Host '  All 256K candidates failed - keeping defaults'
+        }
+        Write-Host ""
+    }
+
     # -- Apply results --
     $modelProfiles["1"].Ngl = [int]$best4096.Ngl
     $modelProfiles["1"].Context = 4096
@@ -1174,6 +1300,24 @@ function Recalculate-ModelProfiles {
         $modelProfiles["5"].Threads = $threads
         $modelProfiles["5"].Speed = "{0} tok/s" -f ([Math]::Round($best32k.TokensPerSecond, 2))
     }
+    if ($results64k.Count -gt 0) {
+        $modelProfiles["6"].Ngl = [int]$best64k.Ngl
+        $modelProfiles["6"].Context = 65536
+        $modelProfiles["6"].Threads = $threads
+        $modelProfiles["6"].Speed = "{0} tok/s" -f ([Math]::Round($best64k.TokensPerSecond, 2))
+    }
+    if ($results128k.Count -gt 0) {
+        $modelProfiles["7"].Ngl = [int]$best128k.Ngl
+        $modelProfiles["7"].Context = 131072
+        $modelProfiles["7"].Threads = $threads
+        $modelProfiles["7"].Speed = "{0} tok/s" -f ([Math]::Round($best128k.TokensPerSecond, 2))
+    }
+    if ($results256k.Count -gt 0) {
+        $modelProfiles["8"].Ngl = [int]$best256k.Ngl
+        $modelProfiles["8"].Context = 262144
+        $modelProfiles["8"].Threads = $threads
+        $modelProfiles["8"].Speed = "{0} tok/s" -f ([Math]::Round($best256k.TokensPerSecond, 2))
+    }
 
     Save-Profiles -profilesToSave $modelProfiles -modelId $modelId
 
@@ -1187,7 +1331,7 @@ function Recalculate-ModelProfiles {
     Write-Host ''
     Write-Host '  Profile          Context   ngl   Speed'
     Write-Host '  ---------------  -------  ----  ----------------'
-    for ($i = 1; $i -le 5; $i++) {
+    for ($i = 1; $i -le 8; $i++) {
         $p = $modelProfiles["$i"]
         $pName = $p.Name.PadRight(15)
         $ctxK = [int]($p.Context / 1024)
