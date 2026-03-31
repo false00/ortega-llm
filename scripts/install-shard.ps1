@@ -7,6 +7,13 @@ param(
     [string]$ModelFile = "Qwen3.5-27B.Q4_K_M.gguf"
 )
 
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Host "install-shard: requires PowerShell 7 or later (running $($PSVersionTable.PSVersion))"
+    Write-Host "Install from: https://aka.ms/install-powershell"
+    Write-Host "Then re-run with: pwsh -File $($MyInvocation.MyCommand.Path)"
+    exit 1
+}
+
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -220,7 +227,7 @@ if not exist "%SCRIPT%" (
     echo Hint: run install-shard.ps1 again from your repo clone.
     exit /b 1
 )
-powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
+pwsh -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
 "@
 
     Set-Content -Path $cmdPath -Value $cmdContent -Encoding ASCII

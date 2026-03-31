@@ -3,6 +3,13 @@ param(
     [string[]]$CommandArgs
 )
 
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Host "shard: requires PowerShell 7 or later (running $($PSVersionTable.PSVersion))"
+    Write-Host "Install from: https://aka.ms/install-powershell"
+    Write-Host "Then re-run with: pwsh -File $($MyInvocation.MyCommand.Path) $($CommandArgs -join ' ')"
+    exit 1
+}
+
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
