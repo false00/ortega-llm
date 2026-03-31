@@ -492,17 +492,24 @@ function Parse-BenchTg64 {
         }
 
         $parts = $line.Split('|') | ForEach-Object { $_.Trim() }
-        if ($parts.Count -lt 10) {
+        if ($parts.Count -lt 8) {
             continue
         }
 
+        # Find tg64 column dynamically - format varies across llama-bench versions
+        $tgIdx = -1
+        for ($i = 0; $i -lt $parts.Count; $i++) {
+            if ($parts[$i] -match '^tg\d+$') {
+                $tgIdx = $i
+                break
+            }
+        }
+        if ($tgIdx -lt 0 -or ($tgIdx + 1) -ge $parts.Count) { continue }
+
+        # ngl is always the 6th column (index 5): model|size|params|backend|ngl
         $nglText = $parts[5]
-        $test = $parts[8]
-        $tsText = $parts[9]
-
-        if ($test -ne "tg64") {
-            continue
-        }
+        # t/s is always the column right after the test column
+        $tsText = $parts[$tgIdx + 1]
 
         $nglMatch = [regex]::Match($nglText, "\d+")
         $tsMatch = [regex]::Match($tsText, "[0-9]+(\.[0-9]+)?")
@@ -696,9 +703,14 @@ function Recalculate-Profiles {
         if ($bline -match '\|' -and $bline -match 'tg64') {
             $benchTgCount++
             $bparts = $bline.Split('|') | ForEach-Object { $_.Trim() }
-            if ($bparts.Count -ge 10) {
+            # Find tg column dynamically
+            $tgI = -1
+            for ($bi = 0; $bi -lt $bparts.Count; $bi++) {
+                if ($bparts[$bi] -match '^tg\d+$') { $tgI = $bi; break }
+            }
+            if ($tgI -ge 0 -and ($tgI + 1) -lt $bparts.Count) {
                 $nglM = [regex]::Match($bparts[5], '\d+')
-                $tsM = [regex]::Match($bparts[9], '[0-9.]+')
+                $tsM = [regex]::Match($bparts[$tgI + 1], '[0-9.]+')
                 if ($nglM.Success -and $tsM.Success) {
                     $el = [Math]::Round($phaseSw.Elapsed.TotalSeconds, 0)
                     Write-Host "    [$benchTgCount/$benchTotal] ngl $($nglM.Value): $($tsM.Value) tok/s (${el}s elapsed)"
