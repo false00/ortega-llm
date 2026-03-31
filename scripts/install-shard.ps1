@@ -10,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$launcherScript = Join-Path $repoRoot "scripts\ortega.ps1"
+$launcherScript = Join-Path $repoRoot "scripts\shard.ps1"
 
 if (-not (Test-Path $launcherScript)) {
     throw "launcher script not found: $launcherScript"
@@ -157,21 +157,21 @@ function Install-Model {
     Write-Host "Downloaded model to: $outPath"
 }
 
-function Install-OrtegaCommand {
+function Install-ShardCommand {
     $targetDir = Join-Path $HOME "bin"
-    $cmdPath = Join-Path $targetDir "ortega.cmd"
+    $cmdPath = Join-Path $targetDir "shard.cmd"
 
-        [Environment]::SetEnvironmentVariable("ORTEGA_HOME", $repoRoot, "User")
-        $env:ORTEGA_HOME = $repoRoot
+        [Environment]::SetEnvironmentVariable("SHARD_HOME", $repoRoot, "User")
+        $env:SHARD_HOME = $repoRoot
 
     Ensure-Dir $targetDir
 
     $cmdContent = @"
 @echo off
-set "SCRIPT=%ORTEGA_HOME%\scripts\ortega.ps1"
+set "SCRIPT=%SHARD_HOME%\scripts\shard.ps1"
 if not exist "%SCRIPT%" (
-    echo ortega: script not found at %SCRIPT%
-    echo Hint: run install-ortega.ps1 again from your repo clone.
+    echo shard: script not found at %SCRIPT%
+    echo Hint: run install-shard.ps1 again from your repo clone.
     exit /b 1
 )
 powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
@@ -202,9 +202,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" %*
     }
 
     Write-Host ""
-    Write-Host "Installed command: ortega"
+    Write-Host "Installed command: shard"
     Write-Host "Launcher file: $cmdPath"
-    Write-Host "ORTEGA_HOME: $repoRoot"
+    Write-Host "SHARD_HOME: $repoRoot"
 }
 
 $resolvedTag = Resolve-LlamaCppTag -requestedTag $LlamaCppTag
@@ -222,12 +222,12 @@ if (-not $SkipModelDownload) {
     Write-Host "Skipping model download (--SkipModelDownload)"
 }
 
-Install-OrtegaCommand
+Install-ShardCommand
 
 Write-Host ""
 Write-Host "Open a NEW terminal, then run:"
-Write-Host "  ortega info"
-Write-Host "  ortega ls"
-Write-Host "  ortega"
-Write-Host "  ortega 2"
-Write-Host "  ortega stop"
+Write-Host "  shard info"
+Write-Host "  shard ls"
+Write-Host "  shard"
+Write-Host "  shard 2"
+Write-Host "  shard stop"

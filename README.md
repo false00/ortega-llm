@@ -1,243 +1,155 @@
-# Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled Daily Run Guide
+# Shard
 
-This guide is for this exact machine and workspace.
+**Run a 27B reasoning model locally. One command. Auto-tuned to your hardware.**
 
-## System and Files
-- OS: Windows
-- GPU: NVIDIA GeForce RTX 4080 (16 GB VRAM)
-- RAM: 64 GB
-- Driver seen during tests: 595.79
-- Runtime: llama.cpp b8589 (CUDA build)
+Shard wraps [Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled](https://huggingface.co/mradermacher/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF) with a zero-config launcher that detects your GPU, benchmarks your system, and picks the fastest settings automatically. No YAML files. No guessing `-ngl` values. Just `shard`.
 
-Paths in this repo:
-- Runtime binaries: `tools/llama-b8589-win-cuda/`
-- Model file: `models/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf`
+---
 
-## Short Answer
-Yes, this model runs well on this system.
+### Why Shard?
 
-Best daily preset from tests:
-- Quant: `Q4_K_M`
-- `-ngl 56`
-- `-c 4096`
-- `-t 12`
-- `-fa on`
+| | |
+|---|---|
+| **One-command install** | Downloads llama.cpp + model + creates the `shard` command globally |
+| **Auto hardware detection** | Detects your GPU, VRAM, CPU cores, CUDA version |
+| **Auto-tuning** | Benchmarks your specific machine and generates optimized profiles |
+| **5 built-in profiles** | From fast daily chat (4K context) to deep reasoning (32K context) |
+| **OpenAI-compatible API** | Drop-in replacement at `localhost:8080/v1` for any app that speaks OpenAI |
+| **Hot profile switching** | Switch context/speed profiles without manual restarts |
+| **Works on any NVIDIA GPU** | CUDA auto-detected; CPU fallback if no GPU |
 
-Measured real generation speed at this preset:
-- about `13.79` to `14.1` tokens/sec
+---
 
-## Ortega Command Launcher (Recommended)
-
-You can control the local API server with a single command: `ortega`.
-
-### Install
-
-From repo root:
+## Quick Start
 
 ```powershell
-.\scripts\install-ortega.ps1
+# 1. Install (downloads runtime + model, creates global 'shard' command)
+.\scripts\install-shard.ps1
+
+# 2. Open a new terminal, then detect your hardware
+shard detect
+
+# 3. Auto-tune for your system (benchmarks GPU, finds optimal settings)
+shard recalc
+
+# 4. Launch
+shard
 ```
 
-What install does:
-- Detects local NVIDIA CUDA capability (if available)
-- Downloads the latest llama.cpp release runtime by default (CUDA when possible, CPU fallback)
-- Downloads the default model used in this repo docs:
-  - `Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf`
-- Creates command wrapper: `C:\Users\<you>\bin\ortega.cmd`
-- Sets user env var `ORTEGA_HOME` to your repo clone path
-- Adds `C:\Users\<you>\bin` to your user PATH (if missing)
-
-After install, open a new terminal.
-
-If you move the repo folder later, re-run install so `ORTEGA_HOME` is updated.
-
-Optional installer flags:
+Server is now live at **`http://127.0.0.1:8080/v1`** — compatible with any OpenAI client.
 
 ```powershell
-# Skip runtime download
-.\scripts\install-ortega.ps1 -SkipRuntimeDownload
-
-# Skip model download
-.\scripts\install-ortega.ps1 -SkipModelDownload
-
-# Force re-download model (for refresh/update)
-.\scripts\install-ortega.ps1 -Force
-
-# Pin a specific llama.cpp release tag (optional; latest is default)
-.\scripts\install-ortega.ps1 -LlamaCppTag b8589
+shard stop       # stop the server
+shard 2          # switch to a different profile
+shard ls         # see all profiles with speeds
+shard status     # check what's running
 ```
 
-### Commands
+---
 
-- `ortega`
-  - Starts profile `1` (daily default)
+## How It Works
 
-- `ortega stop`
-  - Stops running server
+### `shard detect` — See Your Hardware
 
-- `ortega ls`
-  - Lists all profiles and speed/context info
+```
+shard: detected system specs
+-----------------------------
+  OS:         Microsoft Windows 10.0.22631
+  CPU:        AMD Ryzen 9 7950X 16-Core Processor
+  CPU cores:  32
+  Threads:    16 (recommended for llama.cpp)
+  RAM:        64 GB
+  GPU:        NVIDIA GeForce RTX 4080
+  VRAM:       16 GB
+  CUDA:       12.4
+```
 
-- `ortega 1`
-  - Start/switch to profile 1
+### `shard recalc` — Auto-Tune Profiles
 
-- `ortega 2`
-  - Start/switch to profile 2
+Runs `llama-bench` and `llama-completion` across multiple GPU layer offload values and context sizes, then saves the fastest working configuration for each profile:
 
-- `ortega 3`
-  - Start/switch to profile 3
+1. Sweeps `-ngl` candidates at 4K context to find your best speed
+2. Probes 8K, 16K, and 32K context to find what your VRAM can handle
+3. Calculates optimal thread count from your CPU
+4. Saves everything to `.shard/profiles.json`
 
-- `ortega status`
-  - Shows current running profile, PID, and endpoint
+After recalc, every profile is tuned to **your** GPU — not someone else's.
 
-- `ortega info`
-  - Shows resolved runtime and model paths (with env var overrides)
+### Profiles
 
-- `ortega update`
-  - Updates llama.cpp runtime and model using latest defaults
-  - If a server is running, it is stopped for update and restarted afterwards
+| # | Name | Context | Purpose |
+|--:|------|--------:|---------|
+| 1 | Daily Default | 4K | Best speed for everyday chat and coding |
+| 2 | Stability Fallback | 4K | Extra VRAM headroom when profile 1 has fit errors |
+| 3 | Long Context | 8K | Larger conversation history |
+| 4 | XL Context | 16K | Extended reasoning and longer documents |
+| 5 | XXL Context | 32K | Maximum context for very long inputs |
 
-- `ortega recalc`
-  - Re-benchmarks this machine and recalculates profile values automatically
-  - Saves tuned profile overrides to `.ortega/profiles.json`
-
-- `ortega reset`
-  - Deletes `.ortega/profiles.json` and returns to built-in default profiles
-
-### Profile behavior
-
-- If you run `ortega 2` while profile 1 is running, it automatically does:
-  1. stop current server
-  2. start server with profile 2 settings
-
-### Profile list (used by `ortega ls`)
-
-| profile | name | settings | measured speed |
-|---:|---|---|---:|
-| 1 | Daily Default | `-ngl 56 -c 4096 -t 12 -fa on` | `13.79` to `14.1` tok/s |
-| 2 | Stability Fallback | `-ngl 48 -c 4096 -t 12 -fa on` | `9-10` tok/s |
-| 3 | Long Context | `-ngl 48 -c 8192 -t 12 -fa on` | `9.23` tok/s |
-
-### Logs and state
-
-Runtime state and logs are written to:
-- `.ortega/state.json`
-- `.ortega/server.stdout.log`
-- `.ortega/server.stderr.log`
-- `.ortega/profiles.json` (only after `ortega recalc`)
-
-Path override environment variables:
-- `ORTEGA_RUNTIME_EXE` to force a specific `llama-server.exe`
-- `ORTEGA_MODEL_PATH` to force a specific `.gguf` model
-
-### Recalculate profiles for your hardware
-
-Run this when you want profile values tuned for your specific GPU/CPU:
+Switch profiles instantly — if a server is running, it auto-restarts with the new settings:
 
 ```powershell
-ortega recalc
+shard 3          # switch to 8K context
+shard 1          # back to fast daily mode
 ```
 
-What it does:
-1. Runs `llama-bench` across multiple `-ngl` candidates for 4096 context
-2. Finds the best and fallback values for profile 1 and profile 2
-3. Runs 8192 context probes with `llama-completion` to find a working fast profile 3
-4. Saves updated profile values to `.ortega/profiles.json`
-5. If a server is currently running, it stops it during calibration and then starts it again
+---
 
-To return to stock defaults:
+## Installation
 
 ```powershell
-ortega reset
+.\scripts\install-shard.ps1
 ```
 
-## Daily Use (Simple Workflow)
+This will:
+- Detect your NVIDIA CUDA version (falls back to CPU if no GPU)
+- Download the matching llama.cpp release
+- Download the Q4_K_M quantized model (~17 GB)
+- Create `shard.cmd` in `~/bin` and add it to your PATH
+- Set `SHARD_HOME` environment variable
 
-### 1) Start local API server
-Run this in PowerShell from repo root:
+Optional flags:
 
 ```powershell
-.\tools\llama-b8589-win-cuda\llama-server.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 56 -c 4096 -t 12 -fa on --host 127.0.0.1 --port 8080
+.\scripts\install-shard.ps1 -SkipRuntimeDownload    # already have llama.cpp
+.\scripts\install-shard.ps1 -SkipModelDownload       # already have the model
+.\scripts\install-shard.ps1 -Force                    # re-download model
+.\scripts\install-shard.ps1 -LlamaCppTag b8589        # pin a specific release
 ```
 
-Use it from apps that support OpenAI-style local endpoints at:
-- `http://127.0.0.1:8080`
+Open a **new terminal** after install.
 
-OpenAI-compatible base URL:
-- `http://127.0.0.1:8080/v1`
+---
 
-Common endpoints:
-- `POST /v1/chat/completions`
-- `POST /v1/completions`
-- `GET /v1/models`
-- `GET /health`
+## All Commands
 
-Stop server with `Ctrl+C`.
+| Command | What it does |
+|---------|-------------|
+| `shard` | Start profile 1 (daily default) |
+| `shard 1` through `shard 5` | Start/switch to a specific profile |
+| `shard stop` | Stop the running server |
+| `shard ls` | List all profiles with settings and speeds |
+| `shard status` | Show running profile, PID, and endpoint |
+| `shard info` | Show resolved runtime and model paths |
+| `shard detect` | Show detected system specs |
+| `shard recalc` | Benchmark hardware and auto-tune all profiles |
+| `shard reset` | Remove tuned profiles, return to defaults |
+| `shard update` | Update llama.cpp runtime and model to latest |
+| `shard help` | Show usage summary |
 
-## Local API Server (Practical Setup)
+---
 
-If your goal is practical daily use, this is the recommended way to run the model.
+## Use with Any OpenAI-Compatible App
 
-### Ranked server profiles
+The server exposes a standard OpenAI API at `http://127.0.0.1:8080/v1`:
 
-### 1) Daily default server profile (recommended)
-- Use when: you want best overall quality/speed for normal chat and coding use
-- Command:
-
-```powershell
-.\tools\llama-b8589-win-cuda\llama-server.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 56 -c 4096 -t 12 -fa on --host 127.0.0.1 --port 8080
+```
+POST /v1/chat/completions
+POST /v1/completions
+GET  /v1/models
+GET  /health
 ```
 
-- Why this is #1 on this machine:
-  - Best repeatable performance in testing
-  - Real generation around 13.79 to 14.1 tok/s at `-c 4096`
-  - Stable for normal daily workloads
-
-### 2) Stability fallback server profile
-- Use when: you get memory fitting errors or want extra VRAM headroom
-- Command:
-
-```powershell
-.\tools\llama-b8589-win-cuda\llama-server.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 48 -c 4096 -t 12 -fa on --host 127.0.0.1 --port 8080
-```
-
-- Why this is #2:
-  - Slightly slower than #1
-  - Benchmarked generation at this offload is around 9 to 10 tok/s at `-c 4096`
-  - More predictable memory behavior
-
-### 3) Long-context server profile
-- Use when: you need larger conversation history
-- Command:
-
-```powershell
-.\tools\llama-b8589-win-cuda\llama-server.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 48 -c 8192 -t 12 -fa on --host 127.0.0.1 --port 8080
-```
-
-- Why this is #3:
-  - Confirmed practical fallback for 8192 context
-  - Measured generation speed is around 9.23 tok/s at `-c 8192`
-
-### Context size to token speed (measured)
-
-| context size | profile used | measured generation speed |
-|---:|---|---:|
-| 4096 | `-ngl 56 -t 12 -fa on` | `13.79` to `14.1` tok/s |
-| 8192 | `-ngl 48 -t 12 -fa on` | `9.23` tok/s |
-
-Notes:
-- These numbers are from real one-shot `llama-completion.exe` runs.
-- 8192 with `-ngl 56` failed memory fitting on this machine.
-
-### Quick health check after startup
-
-```powershell
-Invoke-WebRequest http://127.0.0.1:8080/health
-```
-
-If this returns success, the server is up.
-
-### Quick API test (OpenAI-compatible)
+### Example: PowerShell
 
 ```powershell
 $body = @{
@@ -252,22 +164,9 @@ $body = @{
 Invoke-RestMethod -Uri "http://127.0.0.1:8080/v1/chat/completions" -Method Post -ContentType "application/json" -Body $body
 ```
 
-### Daily operation checklist
-1. Start profile #1.
-2. Run health check.
-3. Run API test once.
-4. If memory fit fails, move to profile #2.
-5. Only use profile #3 when you really need longer context.
+### Example: OpenCode
 
-## Using with OpenCode (open-source Cursor alternative)
-
-You can use the local API endpoint with [OpenCode](https://opencode.ai/), an open-source IDE assistant platform.
-
-### Setup
-
-1. Install OpenCode and create or open your `opencode.json` config file.
-
-2. Add this configuration block to your `opencode.json`:
+Add to your `opencode.json`:
 
 ```json
 {
@@ -290,213 +189,108 @@ You can use the local API endpoint with [OpenCode](https://opencode.ai/), an ope
 }
 ```
 
-3. Make sure the `ortega` server is running before using OpenCode.
+Works with any tool that supports OpenAI-compatible endpoints: [Open WebUI](https://github.com/open-webui/open-webui), [Continue.dev](https://continue.dev), [SillyTavern](https://sillytavernai.com/), [OpenCode](https://opencode.ai/), etc.
 
-4. Restart OpenCode after saving the config.
+---
 
-### Notes
+## CLI Usage (No Server)
 
-- The config assumes the server is running on the default `http://127.0.0.1:8080/v1` endpoint.
-- Use `ortega status` to verify the server is running and see the current API endpoint.
-- If you change profiles or the port, update the `baseURL` accordingly.
-
-## CLI Usage (No API Server)
-
-Use this when you want to run everything directly from terminal.
-
-### Ranked CLI profiles
-
-### 1) One-shot CLI default (recommended)
-- Best for: quick prompts, scripts, testing
-- Context/speed: `-c 4096` at about `13.79` to `14.1` tok/s
+For one-shot prompts directly from the terminal:
 
 ```powershell
 .\tools\llama-b8589-win-cuda\llama-completion.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 56 -c 4096 -t 12 -fa on -no-cnv --temp 0.3 -n 256 -p "Explain quantization in 4 bullets."
 ```
 
-### 2) Interactive CLI chat
-- Best for: terminal-only chat sessions
-- Note: interactive mode waits for more input by design
+For interactive chat:
 
 ```powershell
 .\tools\llama-b8589-win-cuda\llama-cli.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 56 -c 4096 -t 12 -fa on --temp 0.6
 ```
 
-Useful commands inside chat:
-- `/clear` clears history
-- `/regen` regenerates last answer
-- `/exit` exits
+> Replace `-ngl` and `-t` values with your `shard ls` output after running `shard recalc`.
 
-### 3) Long-context one-shot CLI fallback
-- Best for: larger prompt history in single prompt runs
-- Context/speed: `-c 8192` at about `9.23` tok/s
+---
 
-```powershell
-.\tools\llama-b8589-win-cuda\llama-completion.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 48 -c 8192 -t 12 -fa on -no-cnv --temp 0.3 -n 256 -p "Summarize this text in bullet points: ..."
-```
+## Author's Benchmarks
 
-### CLI quick fallback order
-1. Start with `-ngl 56 -c 4096`.
-2. If fit fails, drop to `-ngl 48 -c 4096`.
-3. If you need larger context, use `-ngl 48 -c 8192`.
-4. If still failing, drop `-ngl` to `44` or `40`.
+Tested on: **RTX 4080 (16 GB VRAM) / 64 GB RAM / Windows**
 
-### 2) One-shot prompt mode
-If you want direct command-line prompts instead of a server:
+Default profiles ship with these values. Run `shard recalc` to replace them with values tuned for your hardware.
 
-```powershell
-.\tools\llama-b8589-win-cuda\llama-completion.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 56 -c 4096 -t 12 -fa on -no-cnv --temp 0.3 -n 256 -p "Explain quantization in 4 bullets."
-```
+### Speed by profile
 
-### 3) If memory errors happen
-Apply in this order:
-1. Drop `-ngl` from `56` to `48`
-2. If needed, drop to `44`, then `40`
-3. If needed, reduce context from `4096` to `3072` or `2048`
+| Profile | Context | `-ngl` | Measured speed |
+|--------:|--------:|-------:|---------------:|
+| 1 | 4096 | 56 | 13.79–14.1 tok/s |
+| 2 | 4096 | 48 | 9–10 tok/s |
+| 3 | 8192 | 48 | 9.23 tok/s |
+| 4 | 16384 | 32 | 5–6 tok/s (est.) |
+| 5 | 32768 | 20 | 2–3 tok/s (est.) |
 
-Fallback command:
+### Full `-ngl` sweep (tg64, Q4_K_M)
 
-```powershell
-.\tools\llama-b8589-win-cuda\llama-completion.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 48 -c 4096 -t 12 -fa on -no-cnv --temp 0.3 -n 256 -p "Your prompt"
-```
-
-## Recommended Presets
-
-### Preset A (best overall)
-- Use: daily balanced quality/speed
-- Flags: `-ngl 56 -c 4096 -t 12 -fa on`
-- Expected speed: around `14 tok/s`
-
-### Preset B (extra stability)
-- Use: occasional fit failures
-- Flags: `-ngl 48 -c 4096 -t 12 -fa on`
-- Expected speed: around `9-10 tok/s` benchmarked
-
-### Preset C (longer context)
-- Use: larger prompt history
-- Flags: `-ngl 48 -c 8192 -t 12 -fa on`
-- Measured real speed: around `9.23 tok/s`
-
-## Ranked Run Order (What To Use First)
-
-If you want the simplest decision path, use runs in this order.
-
-### 1) Recommended default for daily use
-- Command type: `llama-server.exe`
-- Flags: `-ngl 56 -c 4096 -t 12 -fa on`
-- Why this is rank #1:
-  - Best repeatable real-world speed on this machine (~14 tok/s)
-  - Enough context for normal daily workflows
-  - Stable in repeated tests
-
-### 2) Recommended fallback when memory fitting fails
-- Command type: `llama-server.exe` or `llama-completion.exe`
-- Flags: `-ngl 48 -c 4096 -t 12 -fa on`
-- Why this is rank #2:
-  - Small speed drop versus rank #1
-  - Much safer VRAM headroom
-  - Good for longer sessions where memory pressure can vary
-
-### 3) Recommended for larger context sessions
-- Command type: `llama-server.exe` or `llama-completion.exe`
-- Flags: `-ngl 48 -c 8192 -t 12 -fa on`
-- Why this is rank #3:
-  - Confirmed working at 8192 context (exit code 0)
-  - Keeps model usable when longer prompt history is required
-  - Slower than 4096 profile (~9.23 tok/s measured)
-
-### 4) Not recommended for normal use on this setup
-- High offload near full GPU (`-ngl 64+`)
-- Why this is not recommended:
-  - Inconsistent benchmark behavior across runs
-  - Sometimes slower than `-ngl 56`
-  - Less predictable for day-to-day reliability
-
-### Quick chooser
-- Use rank #1 if you want best all-around daily experience.
-- Use rank #2 if you see fit/memory errors with rank #1.
-- Use rank #3 only when you need more context window.
-
-## Benchmarks Collected
-
-All benchmark runs below used:
-- `llama-bench`
-- model `Q4_K_M`
-- `-r 1 --no-warmup -p 256 -n 64 -t 12 -fa 1`
-
-### Benchmark sweep results (tg64)
-
-| ngl | tg64 t/s | notes |
-|---:|---:|---|
+| ngl | tok/s | notes |
+|----:|------:|-------|
 | 16 | 4.46 | stable |
 | 20 | 4.82 | stable |
 | 24 | 5.03 | stable |
 | 28 | 5.21 | stable |
 | 32 | 5.96 | stable |
 | 36 | 6.49 | stable |
-| 40 | 6.96 | rerun validated |
-| 44 | 8.19 | rerun validated |
-| 48 | 9.53 | rerun validated |
-| 56 | 13.96 | rerun validated, best |
-| 64 | 1.89 (one run), 6.53 (earlier run) | inconsistent |
-| 80 | 1.83 (one run), 6.16 (earlier run) | inconsistent |
-| 99 | 5.98 (rerun), 3.90 (earlier run) | inconsistent |
+| 40 | 6.96 | validated |
+| 44 | 8.19 | validated |
+| 48 | 9.53 | validated |
+| **56** | **13.96** | **best stable** |
+| 64 | 1.89–6.53 | inconsistent |
+| 80 | 1.83–6.16 | inconsistent |
+| 99 | 3.90–5.98 | inconsistent |
 
-Note on inconsistencies:
-- High `ngl` values near full offload (`64+`) were not consistently better in repeated tests on this setup.
-- `ngl 56` was the strongest repeatable point.
+> High `-ngl` values (64+) were unreliable on this GPU. `shard recalc` finds the sweet spot for yours.
 
-### Real one-shot completion tests
+### Reproduce
 
-Using `llama-completion.exe -no-cnv`:
-
-- `-ngl 56 -c 4096`: `13.79 tok/s` eval
-- `-ngl 48 -c 8192`: `9.23 tok/s` eval
-
-Also observed earlier with `llama-cli` at 4096:
-- around `14.1 tok/s`
-
-## Reproduce the Tests
-
-### A) Full ngl sweep command
 ```powershell
+# Full sweep
 .\tools\llama-b8589-win-cuda\llama-bench.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -r 1 --no-warmup -p 256 -n 64 -t 12 -ngl 16,20,24,28,32,36,40,44,48,56,64,80,99 -fa 1 -o md
-```
 
-### B) Focused validation command
-```powershell
+# Focused validation
 .\tools\llama-b8589-win-cuda\llama-bench.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -r 1 --no-warmup -p 256 -n 64 -t 12 -ngl 40,44,48,56,99 -fa 1 -o md
 ```
 
-### C) Real completion speed command (4096)
-```powershell
-.\tools\llama-b8589-win-cuda\llama-completion.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 56 -c 4096 -n 64 -t 12 -fa on -no-cnv --temp 0.3 --no-warmup -p "Give 4 concise bullets about local LLM setup."
-```
+---
 
-### D) Real completion speed command (8192 fallback)
-```powershell
-.\tools\llama-b8589-win-cuda\llama-completion.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 48 -c 8192 -n 64 -t 12 -fa on -no-cnv --temp 0.3 --no-warmup -p "Give 4 concise bullets about local LLM setup."
-```
+## Troubleshooting
 
-## Known Errors and Fast Fixes
+| Error | Fix |
+|-------|-----|
+| `invalid argument: -temp` | Use `--temp`, not `-temp` |
+| `failed to fit params to free device memory` | Lower `-ngl` first, then `-c`. Or switch to a higher-numbered profile |
+| Command appears stuck | You're in interactive mode. Use `llama-completion.exe` with `-no-cnv` for one-shot |
+| `llama-bench` rejects `-c` | This build doesn't accept `-c` in bench mode — remove it |
 
-- Error: `invalid argument: -temp`
-  - Fix: use `--temp`, not `-temp`.
+---
 
-- Error: `failed to fit params to free device memory`
-  - Fix: lower `-ngl` first, then lower `-c`.
+## Configuration
 
-- Error: command appears stuck
-  - Cause: conversation/interactive mode waiting for input.
-  - Fix: use `llama-completion.exe` with `-no-cnv` for one-shot runs.
+### Environment variable overrides
 
-- Error with `llama-bench ... -c ...`
-  - Cause: this build rejects `-c` in bench mode.
-  - Fix: remove `-c` from benchmark commands.
+| Variable | Purpose |
+|----------|---------|
+| `SHARD_HOME` | Repo root (set by installer) |
+| `SHARD_RUNTIME_EXE` | Force a specific `llama-server.exe` path |
+| `SHARD_MODEL_PATH` | Force a specific `.gguf` model path |
 
-## Practical Recommendation
+### Logs and state
 
-For normal daily use on this exact system:
-1. Use `llama-server.exe` with `-ngl 56 -c 4096 -t 12 -fa on`.
-2. Keep `Q4_K_M` as default quant.
-3. Use `-ngl 48` only when memory fitting fails or when you need `-c 8192`.
+| File | Purpose |
+|------|---------|
+| `.shard/state.json` | Running server state |
+| `.shard/server.stdout.log` | Server stdout |
+| `.shard/server.stderr.log` | Server stderr |
+| `.shard/profiles.json` | Tuned profiles (after `shard recalc`) |
+
+---
+
+## License
+
+This repo provides tooling and configuration only. The model weights are subject to their upstream license. See the [model card](https://huggingface.co/mradermacher/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF) for details.

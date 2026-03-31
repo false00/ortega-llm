@@ -10,8 +10,8 @@ tools/
 *.csv
 *.jsonl
 
-# Local ortega launcher runtime state
-.ortega/
+# Local shard launcher runtime state
+.shard/
 
 # Python artifacts (if scripts are added later)
 __pycache__/

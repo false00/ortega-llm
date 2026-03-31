@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $preferredModelName = "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf"
-$stateDir = Join-Path $repoRoot ".ortega"
+$stateDir = Join-Path $repoRoot ".shard"
 $stateFile = Join-Path $stateDir "state.json"
 $profileOverrideFile = Join-Path $stateDir "profiles.json"
 $stdoutLog = Join-Path $stateDir "server.stdout.log"
@@ -48,7 +48,7 @@ $defaultProfiles = [ordered]@{
         Ngl = 32
         Threads = 12
         FlashAttn = "on"
-        Speed = "5-6 tok/s"
+        Speed = "5-6 tok/s (author estimate)"
     }
     "5" = @{
         Name = "XXL Context"
@@ -57,7 +57,7 @@ $defaultProfiles = [ordered]@{
         Ngl = 20
         Threads = 12
         FlashAttn = "on"
-        Speed = "2-3 tok/s"
+        Speed = "2-3 tok/s (author estimate)"
     }
 }
 
@@ -106,8 +106,8 @@ function Get-RunningProcessFromState {
 }
 
 function Resolve-RuntimeExe {
-    if ($env:ORTEGA_RUNTIME_EXE -and (Test-Path $env:ORTEGA_RUNTIME_EXE)) {
-        return $env:ORTEGA_RUNTIME_EXE
+    if ($env:SHARD_RUNTIME_EXE -and (Test-Path $env:SHARD_RUNTIME_EXE)) {
+        return $env:SHARD_RUNTIME_EXE
     }
 
     $toolsDir = Join-Path $repoRoot "tools"
@@ -160,8 +160,8 @@ function Resolve-BenchExe {
 }
 
 function Resolve-ModelPath {
-    if ($env:ORTEGA_MODEL_PATH -and (Test-Path $env:ORTEGA_MODEL_PATH)) {
-        return $env:ORTEGA_MODEL_PATH
+    if ($env:SHARD_MODEL_PATH -and (Test-Path $env:SHARD_MODEL_PATH)) {
+        return $env:SHARD_MODEL_PATH
     }
 
     $modelsDir = Join-Path $repoRoot "models"
@@ -218,7 +218,7 @@ function Load-Profiles {
             $profiles[$id].Threads = [int]$profiles[$id].Threads
         }
     } catch {
-        Write-Host "ortega: warning: could not parse profile overrides, using defaults"
+        Write-Host "shard: warning: could not parse profile overrides, using defaults"
     }
 
     return $profiles
@@ -229,27 +229,27 @@ function Save-Profiles($profilesToSave) {
     ($profilesToSave | ConvertTo-Json -Depth 8) | Set-Content -Path $profileOverrideFile -Encoding UTF8
 }
 
-function Stop-Ortega {
+function Stop-Shard {
     $p = Get-RunningProcessFromState
     if ($null -eq $p) {
-        Write-Host "ortega: no running server found"
+        Write-Host "shard: no running server found"
         return
     }
 
     Stop-Process -Id $p.Id -Force
     Clear-ServerState
-    Write-Host "ortega: stopped server (PID $($p.Id))"
+    Write-Host "shard: stopped server (PID $($p.Id))"
 }
 
-function Start-Ortega([string]$profileId) {
+function Start-Shard([string]$profileId) {
     $runtimeExe = Resolve-RuntimeExe
     $modelPath = Resolve-ModelPath
 
     if (-not $runtimeExe -or -not (Test-Path $runtimeExe)) {
-        throw "llama-server not found. Run .\\scripts\\install-ortega.ps1 to bootstrap runtime assets."
+        throw "llama-server not found. Run .\\scripts\\install-shard.ps1 to bootstrap runtime assets."
     }
     if (-not $modelPath -or -not (Test-Path $modelPath)) {
-        throw "GGUF model not found. Run .\\scripts\\install-ortega.ps1 to download the default model."
+        throw "GGUF model not found. Run .\\scripts\\install-shard.ps1 to download the default model."
     }
     if (-not $profiles.Contains($profileId)) {
         throw "invalid profile id: $profileId"
@@ -261,13 +261,13 @@ function Start-Ortega([string]$profileId) {
     if ($null -ne $running) {
         $state = Get-ServerState
         if ($state.ProfileId -eq $profileId) {
-            Write-Host "ortega: already running profile $profileId ($($profile.Name)) on http://127.0.0.1:8080"
-            Write-Host "ortega: PID $($running.Id)"
+            Write-Host "shard: already running profile $profileId ($($profile.Name)) on http://127.0.0.1:8080"
+            Write-Host "shard: PID $($running.Id)"
             return
         }
 
-        Write-Host "ortega: switching from profile $($state.ProfileId) to $profileId"
-        Stop-Ortega
+        Write-Host "shard: switching from profile $($state.ProfileId) to $profileId"
+        Stop-Shard
     }
 
     Ensure-StateDir
@@ -304,19 +304,19 @@ function Start-Ortega([string]$profileId) {
             $stderrTail = (Get-Content -Path $stderrLog -Tail 30 -ErrorAction SilentlyContinue) -join "`n"
         }
         Clear-ServerState
-        throw "ortega: server exited during startup. Last stderr lines:`n$stderrTail"
+        throw "shard: server exited during startup. Last stderr lines:`n$stderrTail"
     }
 
-    Write-Host "ortega: started profile $profileId ($($profile.Name))"
-    Write-Host "ortega: endpoint http://127.0.0.1:8080"
-    Write-Host "ortega: PID $($proc.Id)"
-    Write-Host "ortega: logs"
+    Write-Host "shard: started profile $profileId ($($profile.Name))"
+    Write-Host "shard: endpoint http://127.0.0.1:8080"
+    Write-Host "shard: PID $($proc.Id)"
+    Write-Host "shard: logs"
     Write-Host "  stdout: $stdoutLog"
     Write-Host "  stderr: $stderrLog"
 }
 
 function Show-Profiles {
-    Write-Host "ortega profiles"
+    Write-Host "shard profiles"
     Write-Host "---------------"
     foreach ($id in $profiles.Keys) {
         $p = $profiles[$id]
@@ -339,25 +339,108 @@ function Show-Profiles {
     }
 }
 
+function Detect-SystemSpecs {
+    $specs = [ordered]@{
+        OS = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
+        CPUName = $null
+        CPUCores = [Environment]::ProcessorCount
+        RecommendedThreads = [Math]::Max(4, [Math]::Min(16, [int][Math]::Floor([Environment]::ProcessorCount / 2)))
+        TotalRAM_GB = $null
+        GPUName = $null
+        VRAM_GB = $null
+        CUDAVersion = $null
+    }
+
+    # RAM
+    try {
+        $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
+        if ($os) {
+            $specs.TotalRAM_GB = [Math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
+        }
+    } catch {}
+
+    # CPU
+    try {
+        $cpu = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cpu) {
+            $specs.CPUName = $cpu.Name.Trim()
+        }
+    } catch {}
+
+    # GPU via nvidia-smi
+    $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+    if ($smi) {
+        try {
+            $raw = & nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>$null | Out-String
+            $lines = $raw.Trim() -split "`r?`n" | Where-Object { $_ -match "\S" }
+            if ($lines.Count -gt 0) {
+                $parts = $lines[0] -split ","
+                $specs.GPUName = $parts[0].Trim()
+                if ($parts.Count -gt 1) {
+                    $specs.VRAM_GB = [Math]::Round([double]$parts[1].Trim() / 1024, 1)
+                }
+            }
+        } catch {}
+
+        try {
+            $rawCuda = & nvidia-smi 2>$null | Out-String
+            if ($rawCuda -match "CUDA Version:\s*([0-9]+\.[0-9]+)") {
+                $specs.CUDAVersion = $Matches[1]
+            }
+        } catch {}
+    }
+
+    return $specs
+}
+
+function Show-DetectedSpecs {
+    $specs = Detect-SystemSpecs
+
+    Write-Host "shard: detected system specs"
+    Write-Host "-----------------------------"
+    Write-Host ("  OS:         {0}" -f $specs.OS)
+    Write-Host ("  CPU:        {0}" -f $(if ($specs.CPUName) { $specs.CPUName } else { "unknown" }))
+    Write-Host ("  CPU cores:  {0}" -f $specs.CPUCores)
+    Write-Host ("  Threads:    {0} (recommended for llama.cpp)" -f $specs.RecommendedThreads)
+    Write-Host ("  RAM:        {0} GB" -f $(if ($specs.TotalRAM_GB) { $specs.TotalRAM_GB } else { "unknown" }))
+    Write-Host ("  GPU:        {0}" -f $(if ($specs.GPUName) { $specs.GPUName } else { "not detected (CPU-only mode)" }))
+    Write-Host ("  VRAM:       {0}" -f $(if ($specs.VRAM_GB) { "{0} GB" -f $specs.VRAM_GB } else { "n/a" }))
+    Write-Host ("  CUDA:       {0}" -f $(if ($specs.CUDAVersion) { $specs.CUDAVersion } else { "n/a" }))
+    Write-Host ""
+
+    if (-not $specs.GPUName) {
+        Write-Host "  No NVIDIA GPU detected. The server will run in CPU-only mode."
+        Write-Host "  Offloading layers (-ngl) will have no effect."
+    } else {
+        Write-Host "  GPU detected. Run 'shard recalc' to benchmark and auto-tune"
+        Write-Host "  profiles for your specific hardware."
+    }
+
+    Write-Host ""
+    Write-Host "  Default profiles are based on the author's system (RTX 4080, 64 GB RAM)."
+    Write-Host "  Run 'shard recalc' to generate optimized profiles for this machine."
+}
+
 function Show-Usage {
     Write-Host "usage:"
-    Write-Host "  ortega            start profile 1 (daily default)"
-    Write-Host "  ortega 1          start/switch to profile 1"
-    Write-Host "  ortega 2          start/switch to profile 2"
-    Write-Host "  ortega 3          start/switch to profile 3"
-    Write-Host "  ortega ls         list profiles"
-    Write-Host "  ortega stop       stop running server"
-    Write-Host "  ortega status     show running status"
-    Write-Host "  ortega info       show resolved runtime/model paths"
-    Write-Host "  ortega update     update llama.cpp runtime + model to latest"
-    Write-Host "  ortega recalc     benchmark this hardware and recalculate profiles"
-    Write-Host "  ortega reset      remove profile overrides and return to defaults"
+    Write-Host "  shard            start profile 1 (daily default)"
+    Write-Host "  shard 1          start/switch to profile 1"
+    Write-Host "  shard 2          start/switch to profile 2"
+    Write-Host "  shard 3          start/switch to profile 3"
+    Write-Host "  shard ls         list profiles"
+    Write-Host "  shard stop       stop running server"
+    Write-Host "  shard status     show running status"
+    Write-Host "  shard info       show resolved runtime/model paths"
+    Write-Host "  shard detect     show detected system specs"
+    Write-Host "  shard update     update llama.cpp runtime + model to latest"
+    Write-Host "  shard recalc     benchmark this hardware and recalculate profiles"
+    Write-Host "  shard reset      remove profile overrides and return to defaults"
 }
 
 function Show-Status {
     $running = Get-RunningProcessFromState
     if ($null -eq $running) {
-        Write-Host "ortega: server is not running"
+        Write-Host "shard: server is not running"
         return
     }
 
@@ -365,8 +448,8 @@ function Show-Status {
     $profiles = Load-Profiles
     $profile = $profiles[$state.ProfileId]
 
-    Write-Host ("ortega: running profile {0} ({1})" -f $state.ProfileId, $state.ProfileName)
-    Write-Host ("ortega: PID {0}" -f $running.Id)
+    Write-Host ("shard: running profile {0} ({1})" -f $state.ProfileId, $state.ProfileName)
+    Write-Host ("shard: PID {0}" -f $running.Id)
     Write-Host ""
     Write-Host "Profile parameters:"
     Write-Host ("  -ngl {0}" -f $profile.Ngl)
@@ -383,15 +466,15 @@ function Show-Info {
     $runtimeExe = Resolve-RuntimeExe
     $modelPath = Resolve-ModelPath
 
-    Write-Host "ortega: resolved paths"
+    Write-Host "shard: resolved paths"
     Write-Host ("  runtime: {0}" -f ($(if ($runtimeExe) { $runtimeExe } else { "<not found>" })))
     Write-Host ("  model:   {0}" -f ($(if ($modelPath) { $modelPath } else { "<not found>" })))
 
-    if ($env:ORTEGA_RUNTIME_EXE) {
-        Write-Host ("  ORTEGA_RUNTIME_EXE override: {0}" -f $env:ORTEGA_RUNTIME_EXE)
+    if ($env:SHARD_RUNTIME_EXE) {
+        Write-Host ("  SHARD_RUNTIME_EXE override: {0}" -f $env:SHARD_RUNTIME_EXE)
     }
-    if ($env:ORTEGA_MODEL_PATH) {
-        Write-Host ("  ORTEGA_MODEL_PATH override:   {0}" -f $env:ORTEGA_MODEL_PATH)
+    if ($env:SHARD_MODEL_PATH) {
+        Write-Host ("  SHARD_MODEL_PATH override:   {0}" -f $env:SHARD_MODEL_PATH)
     }
 }
 
@@ -432,15 +515,16 @@ function Parse-BenchTg64 {
     return $results
 }
 
-function Measure-8192Candidate {
+function Measure-ContextCandidate {
     param(
         [string]$completionExe,
         [string]$modelPath,
         [int]$ngl,
+        [int]$context,
         [int]$threads
     )
 
-    $out = & $completionExe -m $modelPath -ngl $ngl -c 8192 -n 64 -t $threads -fa on -no-cnv --temp 0.3 --no-warmup -p "Test." 2>&1 | Out-String
+    $out = & $completionExe -m $modelPath -ngl $ngl -c $context -n 64 -t $threads -fa on -no-cnv --temp 0.3 --no-warmup -p "Test." 2>&1 | Out-String
 
     if ($LASTEXITCODE -ne 0 -or $out -match "failed to fit params|error:") {
         return $null
@@ -461,10 +545,10 @@ function Recalculate-Profiles {
     $completionExe = Resolve-CompletionExe -runtimeExe $runtimeExe
 
     if (-not $runtimeExe -or -not (Test-Path $runtimeExe)) {
-        throw "llama-server not found. Install runtime first with .\\scripts\\install-ortega.ps1"
+        throw "llama-server not found. Install runtime first with .\\scripts\\install-shard.ps1"
     }
     if (-not $modelPath -or -not (Test-Path $modelPath)) {
-        throw "model not found. Install model first with .\\scripts\\install-ortega.ps1"
+        throw "model not found. Install model first with .\\scripts\\install-shard.ps1"
     }
     if (-not $benchExe -or -not (Test-Path $benchExe)) {
         throw "llama-bench.exe not found next to runtime"
@@ -478,8 +562,8 @@ function Recalculate-Profiles {
     if ($null -ne $alreadyRunning) {
         $runningState = Get-ServerState
         $resumeProfileId = $runningState.ProfileId
-        Write-Host ("ortega: stopping running server (profile {0}) before calibration" -f $resumeProfileId)
-        Stop-Ortega
+        Write-Host ("shard: stopping running server (profile {0}) before calibration" -f $resumeProfileId)
+        Stop-Shard
         Start-Sleep -Seconds 1
     }
 
@@ -487,8 +571,8 @@ function Recalculate-Profiles {
     $candidates4096 = @(32, 40, 44, 48, 56, 64)
     $candidateArg = ($candidates4096 -join ",")
 
-    Write-Host "ortega: recalc started"
-    Write-Host ("ortega: benchmarking 4096-context candidates: {0}" -f $candidateArg)
+    Write-Host "shard: recalc started"
+    Write-Host ("shard: benchmarking 4096-context candidates: {0}" -f $candidateArg)
 
     $benchOut = & $benchExe -m $modelPath -r 1 --no-warmup -p 256 -n 64 -t $threads -ngl $candidateArg -fa 1 -o md 2>&1 | Out-String
     $benchRows = Parse-BenchTg64 -text $benchOut
@@ -508,14 +592,14 @@ function Recalculate-Profiles {
         $fallback4096 = $best4096
     }
 
-    Write-Host ("ortega: best 4096 profile => ngl {0}, {1} tok/s" -f $best4096.Ngl, ([Math]::Round($best4096.TokensPerSecond, 2)))
+    Write-Host ("shard: best 4096 profile => ngl {0}, {1} tok/s" -f $best4096.Ngl, ([Math]::Round($best4096.TokensPerSecond, 2)))
 
     $candidates8192 = @(56, 48, 44, 40, 32)
     $results8192 = @()
 
-    Write-Host "ortega: probing 8192-context candidates (this may take a bit)..."
+    Write-Host "shard: probing 8192-context candidates (this may take a bit)..."
     foreach ($ngl in $candidates8192) {
-        $speed = Measure-8192Candidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -threads $threads
+        $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 8192 -threads $threads
         if ($null -eq $speed) {
             Write-Host ("  ngl {0}: failed" -f $ngl)
             continue
@@ -546,32 +630,86 @@ function Recalculate-Profiles {
     $profiles["3"].Threads = $threads
     $profiles["3"].Speed = "{0} tok/s" -f ([Math]::Round($best8192.TokensPerSecond, 2))
 
+    # --- Profile 4: 16K context ---
+    $candidates16k = @(48, 44, 40, 32, 24, 20)
+    $results16k = @()
+
+    Write-Host "shard: probing 16384-context candidates..."
+    foreach ($ngl in $candidates16k) {
+        $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 16384 -threads $threads
+        if ($null -eq $speed) {
+            Write-Host ("  ngl {0}: failed" -f $ngl)
+            continue
+        }
+
+        Write-Host ("  ngl {0}: {1} tok/s" -f $ngl, ([Math]::Round($speed, 2)))
+        $results16k += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+    }
+
+    if ($results16k.Count -gt 0) {
+        $best16k = $results16k | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
+        $profiles["4"].Ngl = [int]$best16k.Ngl
+        $profiles["4"].Context = 16384
+        $profiles["4"].Threads = $threads
+        $profiles["4"].Speed = "{0} tok/s" -f ([Math]::Round($best16k.TokensPerSecond, 2))
+    } else {
+        Write-Host "shard: all 16384 candidates failed, profile 4 kept at defaults"
+    }
+
+    # --- Profile 5: 32K context ---
+    $candidates32k = @(32, 24, 20, 16, 12, 8)
+    $results32k = @()
+
+    Write-Host "shard: probing 32768-context candidates..."
+    foreach ($ngl in $candidates32k) {
+        $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 32768 -threads $threads
+        if ($null -eq $speed) {
+            Write-Host ("  ngl {0}: failed" -f $ngl)
+            continue
+        }
+
+        Write-Host ("  ngl {0}: {1} tok/s" -f $ngl, ([Math]::Round($speed, 2)))
+        $results32k += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+    }
+
+    if ($results32k.Count -gt 0) {
+        $best32k = $results32k | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
+        $profiles["5"].Ngl = [int]$best32k.Ngl
+        $profiles["5"].Context = 32768
+        $profiles["5"].Threads = $threads
+        $profiles["5"].Speed = "{0} tok/s" -f ([Math]::Round($best32k.TokensPerSecond, 2))
+    } else {
+        Write-Host "shard: all 32768 candidates failed, profile 5 kept at defaults"
+    }
+
     Save-Profiles -profilesToSave $profiles
 
     Write-Host ""
-    Write-Host "ortega: recalculation complete"
+    Write-Host "shard: recalculation complete"
     Write-Host ("  profile 1 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["1"].Ngl, $profiles["1"].Context, $profiles["1"].Threads, $profiles["1"].Speed)
     Write-Host ("  profile 2 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["2"].Ngl, $profiles["2"].Context, $profiles["2"].Threads, $profiles["2"].Speed)
     Write-Host ("  profile 3 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["3"].Ngl, $profiles["3"].Context, $profiles["3"].Threads, $profiles["3"].Speed)
+    Write-Host ("  profile 4 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["4"].Ngl, $profiles["4"].Context, $profiles["4"].Threads, $profiles["4"].Speed)
+    Write-Host ("  profile 5 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["5"].Ngl, $profiles["5"].Context, $profiles["5"].Threads, $profiles["5"].Speed)
     Write-Host ("  overrides saved to: {0}" -f $profileOverrideFile)
 
     if ($resumeProfileId) {
-        Write-Host ("ortega: restarting previously running profile {0}" -f $resumeProfileId)
-        Start-Ortega -profileId $resumeProfileId
+        Write-Host ("shard: restarting previously running profile {0}" -f $resumeProfileId)
+        Start-Shard -profileId $resumeProfileId
     }
 }
 
 function Reset-Profiles {
     if (Test-Path $profileOverrideFile) {
         Remove-Item -Path $profileOverrideFile -Force
-        Write-Host "ortega: removed profile overrides"
+        Write-Host "shard: removed profile overrides"
     } else {
-        Write-Host "ortega: no profile overrides found"
+        Write-Host "shard: no profile overrides found"
     }
 }
 
-function Update-Ortega {
-    $installScript = Join-Path $repoRoot "scripts\install-ortega.ps1"
+function Update-Shard {
+    $installScript = Join-Path $repoRoot "scripts\install-shard.ps1"
     if (-not (Test-Path $installScript)) {
         throw "install script not found: $installScript"
     }
@@ -581,30 +719,30 @@ function Update-Ortega {
     if ($null -ne $running) {
         $runningState = Get-ServerState
         $resumeProfileId = $runningState.ProfileId
-        Write-Host ("ortega: stopping running server (profile {0}) before update" -f $resumeProfileId)
-        Stop-Ortega
+        Write-Host ("shard: stopping running server (profile {0}) before update" -f $resumeProfileId)
+        Stop-Shard
         Start-Sleep -Seconds 1
     }
 
-    Write-Host "ortega: updating llama.cpp runtime and model to latest supported assets..."
+    Write-Host "shard: updating llama.cpp runtime and model to latest supported assets..."
     & $installScript -Force
     if ($LASTEXITCODE -ne 0) {
-        throw "ortega: update failed"
+        throw "shard: update failed"
     }
 
     if ($resumeProfileId) {
         $profiles = Load-Profiles
-        Write-Host ("ortega: restarting previously running profile {0}" -f $resumeProfileId)
-        Start-Ortega -profileId $resumeProfileId
+        Write-Host ("shard: restarting previously running profile {0}" -f $resumeProfileId)
+        Start-Shard -profileId $resumeProfileId
     }
 
-    Write-Host "ortega: update complete"
+    Write-Host "shard: update complete"
 }
 
 $profiles = Load-Profiles
 
 if ($CommandArgs.Count -eq 0) {
-    Start-Ortega -profileId "1"
+    Start-Shard -profileId "1"
     exit 0
 }
 
@@ -618,7 +756,7 @@ switch ($cmd) {
         Show-Profiles
     }
     "stop" {
-        Stop-Ortega
+        Stop-Shard
     }
     "status" {
         Show-Status
@@ -626,8 +764,11 @@ switch ($cmd) {
     "info" {
         Show-Info
     }
+    "detect" {
+        Show-DetectedSpecs
+    }
     "update" {
-        Update-Ortega
+        Update-Shard
     }
     "recalc" {
         Recalculate-Profiles
@@ -646,7 +787,7 @@ switch ($cmd) {
     }
     default {
         if ($profiles.Contains($cmd)) {
-            Start-Ortega -profileId $cmd
+            Start-Shard -profileId $cmd
         } else {
             Show-Usage
             throw "unknown command: $cmd"
