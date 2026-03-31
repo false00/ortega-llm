@@ -360,7 +360,7 @@ function Get-ActiveModelId {
     if (-not (Test-Path $profileOverrideFile)) { return "27B" }
     try {
         $data = Get-Content -Raw -Path $profileOverrideFile | ConvertFrom-Json -AsHashtable
-        if ($data.ContainsKey("activeModel")) { return $data["activeModel"] }
+        if ($data.Contains("activeModel")) { return $data["activeModel"] }
         return "27B"
     } catch { return "27B" }
 }
@@ -378,7 +378,7 @@ function Load-AllProfileData {
     try {
         $data = Get-Content -Raw -Path $profileOverrideFile | ConvertFrom-Json -AsHashtable
         # Migrate legacy format (flat profile keys without "activeModel")
-        if (-not $data.ContainsKey("activeModel")) {
+        if (-not $data.Contains("activeModel")) {
             $legacyProfiles = @{}
             foreach ($k in $data.Keys) { $legacyProfiles[$k] = $data[$k] }
             $migrated = @{
@@ -389,7 +389,7 @@ function Load-AllProfileData {
             Save-AllProfileData $migrated
             return $migrated
         }
-        if (-not $data.ContainsKey("models")) { $data["models"] = @{} }
+        if (-not $data.Contains("models")) { $data["models"] = @{} }
         return $data
     } catch {
         return @{ "activeModel" = "27B"; "models" = @{} }
@@ -420,7 +420,7 @@ function Load-Profiles {
     }
 
     $allData = Load-AllProfileData
-    if ($allData["models"] -and $allData["models"].ContainsKey($modelId)) {
+    if ($allData["models"] -and $allData["models"].Contains($modelId)) {
         $override = $allData["models"][$modelId]
         foreach ($id in $override.Keys) {
             if (-not $profiles.Contains($id)) { continue }
@@ -449,7 +449,7 @@ function Save-Profiles {
 
 function Model-HasTunedProfiles([string]$modelId) {
     $allData = Load-AllProfileData
-    return ($allData["models"] -and $allData["models"].ContainsKey($modelId))
+    return ($allData["models"] -and $allData["models"].Contains($modelId))
 }
 
 # ── Server Management ──────────────────────────────────────────────────────────
@@ -629,7 +629,7 @@ function Show-Status {
 
     $state = Get-ServerState
     $modelId = if ($state.ModelId) { $state.ModelId } else { Get-ActiveModelId }
-    $modelName = if ($ModelCatalog.ContainsKey($modelId)) { $ModelCatalog[$modelId].Name } else { $modelId }
+    $modelName = if ($ModelCatalog.Contains($modelId)) { $ModelCatalog[$modelId].Name } else { $modelId }
     $currentProfiles = Load-Profiles -modelId $modelId
     $profile = $currentProfiles[$state.ProfileId]
 
@@ -1715,9 +1715,9 @@ function Download-ModelInteractive {
     } else {
         foreach ($part in ($input -split ',')) {
             $num = $part.Trim()
-            if ($choices.ContainsKey($num)) {
+            if ($choices.Contains($num)) {
                 $toDownload += $choices[$num]
-            } elseif ($ModelCatalog.ContainsKey($num.ToUpperInvariant())) {
+            } elseif ($ModelCatalog.Contains($num.ToUpperInvariant())) {
                 $toDownload += $num.ToUpperInvariant()
             } else {
                 Write-Host "  Unknown selection: $num"
@@ -1733,7 +1733,7 @@ function Download-ModelInteractive {
     # Per-model quant selection with recommendations
     foreach ($mid in $toDownload) {
         $mc = $ModelCatalog[$mid]
-        $rec = if ($recQuants.ContainsKey($mid)) { $recQuants[$mid] } else { $null }
+        $rec = if ($recQuants.Contains($mid)) { $recQuants[$mid] } else { $null }
         $defaultQuant = if ($rec -and $rec.Quant) { $rec.Quant } else { $mc.DefaultQuant }
 
         Write-Host ''
@@ -1782,7 +1782,7 @@ function Reset-Profiles {
     if ($modelId) {
         # Reset specific model
         $allData = Load-AllProfileData
-        if ($allData["models"] -and $allData["models"].ContainsKey($modelId)) {
+        if ($allData["models"] -and $allData["models"].Contains($modelId)) {
             $allData["models"].Remove($modelId)
             Save-AllProfileData $allData
             Write-Host "shard: removed profile overrides for $modelId"

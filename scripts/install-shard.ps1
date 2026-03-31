@@ -368,9 +368,9 @@ function Select-ModelsInteractive {
     } else {
         foreach ($part in ($selection -split ',')) {
             $num = $part.Trim()
-            if ($choices.ContainsKey($num)) {
+            if ($choices.Contains($num)) {
                 $selected += $choices[$num]
-            } elseif ($ModelCatalog.ContainsKey($num.ToUpperInvariant())) {
+            } elseif ($ModelCatalog.Contains($num.ToUpperInvariant())) {
                 $selected += $num.ToUpperInvariant()
             } else {
                 Write-Host "  Unknown selection: $num, skipping"
@@ -384,7 +384,7 @@ function Select-ModelsInteractive {
     $results = @()
     foreach ($mid in $selected) {
         $mc = $ModelCatalog[$mid]
-        $rec = if ($recQuants.ContainsKey($mid)) { $recQuants[$mid] } else { $null }
+        $rec = if ($recQuants.Contains($mid)) { $recQuants[$mid] } else { $null }
         $defaultQ = if ($rec -and $rec.Quant) { $rec.Quant } elseif ($Quant -and $mc.Quants.Contains($Quant)) { $Quant } else { $mc.DefaultQuant }
 
         Write-Host ''
@@ -497,9 +497,9 @@ if (-not $SkipModelDownload) {
         } else {
             foreach ($m in $Models) {
                 $upper = $m.ToUpperInvariant()
-                if ($ModelCatalog.ContainsKey($upper)) {
+                if ($ModelCatalog.Contains($upper)) {
                     $modelIds += $upper
-                } elseif ($ModelCatalog.ContainsKey($m)) {
+                } elseif ($ModelCatalog.Contains($m)) {
                     $modelIds += $m
                 } else {
                     Write-Host "Unknown model: $m (available: $($ModelCatalog.Keys -join ', '))"
