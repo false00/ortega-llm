@@ -3,8 +3,8 @@ param(
     [switch]$SkipModelDownload,
     [string]$LlamaCppTag,
     [switch]$Force,
-    [string]$ModelRepo = "Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled",
-    [string]$ModelFile = "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf"
+    [string]$ModelRepo = "Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF",
+    [string]$ModelFile = "Qwen3.5-27B.Q4_K_M.gguf"
 )
 
 $ErrorActionPreference = "Stop"
@@ -152,7 +152,7 @@ function Install-Model {
         Write-Host "Force enabled: re-downloading model to: $outPath"
     }
 
-    $url = "https://huggingface.co/$repo/resolve/main/$file?download=true"
+    $url = "https://huggingface.co/${repo}/resolve/main/${file}?download=true"
     Invoke-Download -url $url -outFile $outPath
     Write-Host "Downloaded model to: $outPath"
 }

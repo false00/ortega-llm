@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$preferredModelName = "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf"
+$preferredModelName = "Qwen3.5-27B.Q4_K_M.gguf"
 $stateDir = Join-Path $repoRoot ".shard"
 $stateFile = Join-Path $stateDir "state.json"
 $profileOverrideFile = Join-Path $stateDir "profiles.json"
@@ -521,21 +521,86 @@ function Measure-ContextCandidate {
         [string]$modelPath,
         [int]$ngl,
         [int]$context,
-        [int]$threads
+        [int]$threads,
+        [int]$candidateNum = 0,
+        [int]$candidateTotal = 0
     )
 
-    $out = & $completionExe -m $modelPath -ngl $ngl -c $context -n 64 -t $threads -fa on -no-cnv --temp 0.3 --no-warmup -p "Test." 2>&1 | Out-String
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $ctxK = [int]($context / 1024)
+    $counter = ''
+    if ($candidateTotal -gt 0) { $counter = "[$candidateNum/$candidateTotal] " }
+    Write-Host "  ${counter}ngl $ngl, ${ctxK}K context:"
 
-    if ($LASTEXITCODE -ne 0 -or $out -match "failed to fit params|error:") {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $completionExe
+    $psi.Arguments = "-m `"$modelPath`" -ngl $ngl -c $context -n 64 -t $threads -fa on -no-cnv --temp 0.3 --no-warmup -p `"Test.`""
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+
+    # stdout is small (generated text) - read async to avoid deadlock
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+
+    # stderr has progress and timing - stream line by line for real-time output
+    $allStderr = [System.Text.StringBuilder]::new()
+    $failed = $false
+    while ($null -ne ($sline = $proc.StandardError.ReadLine())) {
+        [void]$allStderr.AppendLine($sline)
+
+        if ($sline -match 'failed to fit params|CUDA out of memory|out of memory') {
+            $failed = $true
+            $el = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
+            Write-Host "    VRAM overflow - model does not fit at this ngl (${el}s)"
+        }
+        elseif ($sline -match 'offloading (\d+).*layers') {
+            $layerCount = $Matches[1]
+            Write-Host "    Offloading $layerCount layers to GPU..."
+        }
+        elseif ($sline -match 'common_perf_print:\s+load time\s*=\s*([0-9.]+)') {
+            $loadS = [Math]::Round([double]$Matches[1] / 1000, 1)
+            Write-Host "    Model loaded (${loadS}s), generating 64 tokens..."
+        }
+        elseif ($sline -match 'eval time\s*=.*?([0-9.]+)\s*tokens per second') {
+            $tokSpeed = $Matches[1]
+            Write-Host "    Speed: $tokSpeed tok/s"
+        }
+        elseif ($sline -match 'llama_memory_breakdown.*CUDA.*\|\s*(\d+)\s*=\s*(\d+)\s*\+') {
+            $totalV = $Matches[1]; $freeV = $Matches[2]
+            $usedV = [int]$totalV - [int]$freeV
+            Write-Host "    VRAM: ${usedV} / ${totalV} MiB used (${freeV} MiB free)"
+        }
+    }
+
+    [void]$stdoutTask.Result
+    $proc.WaitForExit()
+
+    $elapsed = $sw.Elapsed.TotalSeconds
+    $elRound = [Math]::Round($elapsed, 1)
+    $out = $allStderr.ToString()
+
+    if ($proc.ExitCode -ne 0 -or $failed) {
+        if (-not $failed) {
+            Write-Host "    Failed with exit code $($proc.ExitCode) (${elRound}s)"
+        }
+        Write-Host ''
         return $null
     }
 
-    $m = [regex]::Match($out, "eval time\s*=.*?,\s*([0-9]+(\.[0-9]+)?)\s*tokens per second")
+    $m = [regex]::Match($out, 'eval time\s*=.*?,\s*([0-9]+(\.[0-9]+)?)\s*tokens per second')
     if (-not $m.Success) {
+        Write-Host "    No speed data captured (${elRound}s)"
+        Write-Host ''
         return $null
     }
 
-    return [double]$m.Groups[1].Value
+    $tps = [double]$m.Groups[1].Value
+    Write-Host "    Done in ${elRound}s"
+    Write-Host ''
+    return $tps
 }
 
 function Recalculate-Profiles {
@@ -567,19 +632,89 @@ function Recalculate-Profiles {
         Start-Sleep -Seconds 1
     }
 
+    $totalSw = [System.Diagnostics.Stopwatch]::StartNew()
     $threads = [Math]::Max(4, [Math]::Min(16, [int][Math]::Floor([Environment]::ProcessorCount / 2)))
+
+    Write-Host ''
+    Write-Host '=========================================='
+    Write-Host '  SHARD RECALC - Auto-Tuning Your Hardware'
+    Write-Host '=========================================='
+    Write-Host ("  Model:   {0}" -f (Split-Path $modelPath -Leaf))
+    Write-Host ("  Threads: {0}" -f $threads)
+    Write-Host ("  Runtime: {0}" -f (Split-Path $runtimeExe -Leaf))
+    Write-Host ''
+    Write-Host '  What is recalc doing?'
+    Write-Host '  ---------------------'
+    Write-Host '  This finds the fastest GPU offload settings for YOUR hardware.'
+    Write-Host '  -ngl (GPU layers) controls how much of the model runs on your GPU.'
+    Write-Host '  Higher ngl = faster, but too high overflows your VRAM and crashes.'
+    Write-Host '  Recalc tests each ngl value at increasing context sizes to find'
+    Write-Host '  the sweet spot where you get max speed without VRAM errors.'
+    Write-Host '  Bigger context = more conversation memory but needs more VRAM.'
+    Write-Host ''
+
+    # -- Phase 1: 4K context bench sweep --
     $candidates4096 = @(32, 40, 44, 48, 56, 64)
     $candidateArg = ($candidates4096 -join ",")
+    $phaseCount = 4
+    $currentPhase = 1
 
-    Write-Host "shard: recalc started"
-    Write-Host ("shard: benchmarking 4096-context candidates: {0}" -f $candidateArg)
+    Write-Host "[$currentPhase/$phaseCount] SPEED TEST at 4K context (everyday chat)"
+    Write-Host '  Testing which ngl values work at the smallest context size.'
+    Write-Host '  This is the baseline - every ngl that works here is a candidate'
+    Write-Host '  for your fastest daily-use profile.'
+    Write-Host "  Candidates: ngl $candidateArg"
+    Write-Host '  Running llama-bench - results stream as each ngl completes...'
+    Write-Host ''
 
-    $benchOut = & $benchExe -m $modelPath -r 1 --no-warmup -p 256 -n 64 -t $threads -ngl $candidateArg -fa 1 -o md 2>&1 | Out-String
+    $phaseSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $benchExe
+    $psi.Arguments = "-m `"$modelPath`" -r 1 --no-warmup -p 256 -n 64 -t $threads -ngl $candidateArg -fa 1 -o md"
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $benchProc = [System.Diagnostics.Process]::Start($psi)
+
+    # stderr has init/debug info - read async to avoid deadlock
+    $benchStderrTask = $benchProc.StandardError.ReadToEndAsync()
+
+    # stdout has markdown table rows - stream for real-time per-ngl results
+    $benchStdout = [System.Text.StringBuilder]::new()
+    $benchTgCount = 0
+    $benchTotal = $candidates4096.Count
+
+    while ($null -ne ($bline = $benchProc.StandardOutput.ReadLine())) {
+        [void]$benchStdout.AppendLine($bline)
+
+        if ($bline -match '\|' -and $bline -match 'tg64') {
+            $benchTgCount++
+            $bparts = $bline.Split('|') | ForEach-Object { $_.Trim() }
+            if ($bparts.Count -ge 10) {
+                $nglM = [regex]::Match($bparts[5], '\d+')
+                $tsM = [regex]::Match($bparts[9], '[0-9.]+')
+                if ($nglM.Success -and $tsM.Success) {
+                    $el = [Math]::Round($phaseSw.Elapsed.TotalSeconds, 0)
+                    Write-Host "    [$benchTgCount/$benchTotal] ngl $($nglM.Value): $($tsM.Value) tok/s (${el}s elapsed)"
+                }
+            }
+        }
+    }
+
+    $benchStderrContent = $benchStderrTask.Result
+    $benchProc.WaitForExit()
+    # merge both streams for robust parsing (table is on stdout with -o md)
+    $benchOut = $benchStdout.ToString() + "`n" + $benchStderrContent
     $benchRows = Parse-BenchTg64 -text $benchOut
 
     if ($benchRows.Count -eq 0) {
-        throw "could not parse benchmark output for 4096 profile"
+        throw 'could not parse benchmark output for 4096 profile'
     }
+
+    $phaseElapsed = [Math]::Round($phaseSw.Elapsed.TotalSeconds, 0)
+    Write-Host "  Completed in ${phaseElapsed}s"
 
     $best4096 = $benchRows | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
 
@@ -592,29 +727,97 @@ function Recalculate-Profiles {
         $fallback4096 = $best4096
     }
 
-    Write-Host ("shard: best 4096 profile => ngl {0}, {1} tok/s" -f $best4096.Ngl, ([Math]::Round($best4096.TokensPerSecond, 2)))
+    $b4ngl = $best4096.Ngl; $b4spd = [Math]::Round($best4096.TokensPerSecond, 2)
+    $f4ngl = $fallback4096.Ngl; $f4spd = [Math]::Round($fallback4096.TokensPerSecond, 2)
+    Write-Host "  Best: ngl $b4ngl at $b4spd tok/s, Fallback: ngl $f4ngl at $f4spd tok/s"
+    Write-Host ""
 
+    # -- Phase 2: 8K context probing --
+    $currentPhase = 2
     $candidates8192 = @(56, 48, 44, 40, 32)
     $results8192 = @()
 
-    Write-Host "shard: probing 8192-context candidates (this may take a bit)..."
+    $ccount = $candidates8192.Count; $clist = $candidates8192 -join ', '
+    Write-Host "[$currentPhase/$phaseCount] VRAM FIT TEST at 8K context (longer conversations)"
+    Write-Host '  Doubling context from 4K to 8K needs more VRAM for the KV cache.'
+    Write-Host '  Testing which ngl values still fit without crashing.'
+    Write-Host "  Candidates: ngl $clist (trying highest first, stopping when one works)"
+    $cIdx = 0
     foreach ($ngl in $candidates8192) {
-        $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 8192 -threads $threads
-        if ($null -eq $speed) {
-            Write-Host ("  ngl {0}: failed" -f $ngl)
-            continue
+        $cIdx++
+        $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 8192 -threads $threads -candidateNum $cIdx -candidateTotal $ccount
+        if ($null -ne $speed) {
+            $results8192 += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
         }
-
-        Write-Host ("  ngl {0}: {1} tok/s" -f $ngl, ([Math]::Round($speed, 2)))
-        $results8192 += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
     }
 
     if ($results8192.Count -eq 0) {
-        throw "all 8192 candidates failed on this hardware"
+        Write-Host '  All 8K candidates failed - keeping profile 3 at defaults'
+    } else {
+        $best8192 = $results8192 | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
+        $b8ngl = $best8192.Ngl; $b8spd = [Math]::Round($best8192.TokensPerSecond, 2)
+        Write-Host "  Best 8K: ngl $b8ngl at $b8spd tok/s"
+    }
+    Write-Host ""
+
+    # -- Phase 3: 16K context probing --
+    $currentPhase = 3
+    $candidates16k = @(48, 44, 40, 32, 24, 20)
+    $results16k = @()
+
+    $ccount = $candidates16k.Count; $clist = $candidates16k -join ', '
+    Write-Host "[$currentPhase/$phaseCount] VRAM FIT TEST at 16K context (extended reasoning)"
+    Write-Host '  16K context uses significantly more VRAM. Lower ngl values are'
+    Write-Host '  expected here - some model layers move back to CPU to make room.'
+    Write-Host "  Candidates: ngl $clist"
+    $cIdx = 0
+    foreach ($ngl in $candidates16k) {
+        $cIdx++
+        $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 16384 -threads $threads -candidateNum $cIdx -candidateTotal $ccount
+        if ($null -ne $speed) {
+            $results16k += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+        }
     }
 
-    $best8192 = $results8192 | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
+    if ($results16k.Count -gt 0) {
+        $best16k = $results16k | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
+        $b16ngl = $best16k.Ngl; $b16spd = [Math]::Round($best16k.TokensPerSecond, 2)
+        Write-Host "  Best 16K: ngl $b16ngl at $b16spd tok/s"
+    } else {
+        Write-Host '  All 16K candidates failed - keeping profile 4 at defaults'
+    }
+    Write-Host ""
 
+    # -- Phase 4: 32K context probing --
+    $currentPhase = 4
+    $candidates32k = @(32, 24, 20, 16, 12, 8)
+    $results32k = @()
+
+    $ccount = $candidates32k.Count; $clist = $candidates32k -join ', '
+    Write-Host "[$currentPhase/$phaseCount] VRAM FIT TEST at 32K context (maximum memory)"
+    Write-Host '  32K is the largest context window. This will be slowest but lets'
+    Write-Host '  you feed very long documents or conversations. Many ngl values'
+    Write-Host '  will fail here - that is normal.'
+    Write-Host "  Candidates: ngl $clist"
+    $cIdx = 0
+    foreach ($ngl in $candidates32k) {
+        $cIdx++
+        $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 32768 -threads $threads -candidateNum $cIdx -candidateTotal $ccount
+        if ($null -ne $speed) {
+            $results32k += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+        }
+    }
+
+    if ($results32k.Count -gt 0) {
+        $best32k = $results32k | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
+        $b32ngl = $best32k.Ngl; $b32spd = [Math]::Round($best32k.TokensPerSecond, 2)
+        Write-Host "  Best 32K: ngl $b32ngl at $b32spd tok/s"
+    } else {
+        Write-Host '  All 32K candidates failed - keeping profile 5 at defaults'
+    }
+    Write-Host ""
+
+    # -- Apply results to profiles --
     $profiles["1"].Ngl = [int]$best4096.Ngl
     $profiles["1"].Context = 4096
     $profiles["1"].Threads = $threads
@@ -625,73 +828,49 @@ function Recalculate-Profiles {
     $profiles["2"].Threads = $threads
     $profiles["2"].Speed = "{0} tok/s" -f ([Math]::Round($fallback4096.TokensPerSecond, 2))
 
-    $profiles["3"].Ngl = [int]$best8192.Ngl
-    $profiles["3"].Context = 8192
-    $profiles["3"].Threads = $threads
-    $profiles["3"].Speed = "{0} tok/s" -f ([Math]::Round($best8192.TokensPerSecond, 2))
-
-    # --- Profile 4: 16K context ---
-    $candidates16k = @(48, 44, 40, 32, 24, 20)
-    $results16k = @()
-
-    Write-Host "shard: probing 16384-context candidates..."
-    foreach ($ngl in $candidates16k) {
-        $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 16384 -threads $threads
-        if ($null -eq $speed) {
-            Write-Host ("  ngl {0}: failed" -f $ngl)
-            continue
-        }
-
-        Write-Host ("  ngl {0}: {1} tok/s" -f $ngl, ([Math]::Round($speed, 2)))
-        $results16k += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+    if ($results8192.Count -gt 0) {
+        $profiles["3"].Ngl = [int]$best8192.Ngl
+        $profiles["3"].Context = 8192
+        $profiles["3"].Threads = $threads
+        $profiles["3"].Speed = "{0} tok/s" -f ([Math]::Round($best8192.TokensPerSecond, 2))
     }
 
     if ($results16k.Count -gt 0) {
-        $best16k = $results16k | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
         $profiles["4"].Ngl = [int]$best16k.Ngl
         $profiles["4"].Context = 16384
         $profiles["4"].Threads = $threads
         $profiles["4"].Speed = "{0} tok/s" -f ([Math]::Round($best16k.TokensPerSecond, 2))
-    } else {
-        Write-Host "shard: all 16384 candidates failed, profile 4 kept at defaults"
-    }
-
-    # --- Profile 5: 32K context ---
-    $candidates32k = @(32, 24, 20, 16, 12, 8)
-    $results32k = @()
-
-    Write-Host "shard: probing 32768-context candidates..."
-    foreach ($ngl in $candidates32k) {
-        $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 32768 -threads $threads
-        if ($null -eq $speed) {
-            Write-Host ("  ngl {0}: failed" -f $ngl)
-            continue
-        }
-
-        Write-Host ("  ngl {0}: {1} tok/s" -f $ngl, ([Math]::Round($speed, 2)))
-        $results32k += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
     }
 
     if ($results32k.Count -gt 0) {
-        $best32k = $results32k | Sort-Object TokensPerSecond -Descending | Select-Object -First 1
         $profiles["5"].Ngl = [int]$best32k.Ngl
         $profiles["5"].Context = 32768
         $profiles["5"].Threads = $threads
         $profiles["5"].Speed = "{0} tok/s" -f ([Math]::Round($best32k.TokensPerSecond, 2))
-    } else {
-        Write-Host "shard: all 32768 candidates failed, profile 5 kept at defaults"
     }
 
     Save-Profiles -profilesToSave $profiles
 
+    $totalElapsed = $totalSw.Elapsed
+    $totalMin = [int][Math]::Floor($totalElapsed.TotalMinutes)
+    $totalSec = $totalElapsed.Seconds
+    Write-Host "=========================================="
+    Write-Host "  RECALC COMPLETE"
+    Write-Host "  Total time: ${totalMin}m ${totalSec}s"
+    Write-Host "=========================================="
     Write-Host ""
-    Write-Host "shard: recalculation complete"
-    Write-Host ("  profile 1 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["1"].Ngl, $profiles["1"].Context, $profiles["1"].Threads, $profiles["1"].Speed)
-    Write-Host ("  profile 2 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["2"].Ngl, $profiles["2"].Context, $profiles["2"].Threads, $profiles["2"].Speed)
-    Write-Host ("  profile 3 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["3"].Ngl, $profiles["3"].Context, $profiles["3"].Threads, $profiles["3"].Speed)
-    Write-Host ("  profile 4 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["4"].Ngl, $profiles["4"].Context, $profiles["4"].Threads, $profiles["4"].Speed)
-    Write-Host ("  profile 5 => -ngl {0} -c {1} -t {2} ({3})" -f $profiles["5"].Ngl, $profiles["5"].Context, $profiles["5"].Threads, $profiles["5"].Speed)
-    Write-Host ("  overrides saved to: {0}" -f $profileOverrideFile)
+    Write-Host '  Profile          Context   ngl   Speed'
+    Write-Host '  ---------------  -------  ----  ----------------'
+    for ($i = 1; $i -le 5; $i++) {
+        $p = $profiles["$i"]
+        $pName = $p.Name.PadRight(15)
+        $ctxK = [int]($p.Context / 1024)
+        $ctxStr = "${ctxK}K".PadRight(7)
+        $pNgl = "$($p.Ngl)".PadLeft(4)
+        Write-Host "  $pName  $ctxStr  $pNgl  $($p.Speed)"
+    }
+    Write-Host ""
+    Write-Host "  Saved to: $profileOverrideFile"
 
     if ($resumeProfileId) {
         Write-Host ("shard: restarting previously running profile {0}" -f $resumeProfileId)

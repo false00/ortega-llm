@@ -2,7 +2,7 @@
 
 **Run a 27B reasoning model locally. One command. Auto-tuned to your hardware.**
 
-Shard wraps [Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled](https://huggingface.co/Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled) with a zero-config launcher that detects your GPU, benchmarks your system, and picks the fastest settings automatically. No YAML files. No guessing `-ngl` values. Just `shard`.
+Shard wraps [Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled](https://huggingface.co/Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF) with a zero-config launcher that detects your GPU, benchmarks your system, and picks the fastest settings automatically. No YAML files. No guessing `-ngl` values. Just `shard`.
 
 ---
 
@@ -198,13 +198,13 @@ Works with any tool that supports OpenAI-compatible endpoints: [Open WebUI](http
 For one-shot prompts directly from the terminal:
 
 ```powershell
-.\tools\llama-b8589-win-cuda\llama-completion.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 56 -c 4096 -t 12 -fa on -no-cnv --temp 0.3 -n 256 -p "Explain quantization in 4 bullets."
+.\tools\llama-b8589-win-cuda\llama-completion.exe -m .\models\Qwen3.5-27B.Q4_K_M.gguf -ngl 56 -c 4096 -t 12 -fa on -no-cnv --temp 0.3 -n 256 -p "Explain quantization in 4 bullets."
 ```
 
 For interactive chat:
 
 ```powershell
-.\tools\llama-b8589-win-cuda\llama-cli.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -ngl 56 -c 4096 -t 12 -fa on --temp 0.6
+.\tools\llama-b8589-win-cuda\llama-cli.exe -m .\models\Qwen3.5-27B.Q4_K_M.gguf -ngl 56 -c 4096 -t 12 -fa on --temp 0.6
 ```
 
 > Replace `-ngl` and `-t` values with your `shard ls` output after running `shard recalc`.
@@ -251,10 +251,10 @@ Default profiles ship with these values. Run `shard recalc` to replace them with
 
 ```powershell
 # Full sweep
-.\tools\llama-b8589-win-cuda\llama-bench.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -r 1 --no-warmup -p 256 -n 64 -t 12 -ngl 16,20,24,28,32,36,40,44,48,56,64,80,99 -fa 1 -o md
+.\tools\llama-b8589-win-cuda\llama-bench.exe -m .\models\Qwen3.5-27B.Q4_K_M.gguf -r 1 --no-warmup -p 256 -n 64 -t 12 -ngl 16,20,24,28,32,36,40,44,48,56,64,80,99 -fa 1 -o md
 
 # Focused validation
-.\tools\llama-b8589-win-cuda\llama-bench.exe -m .\models\Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled.Q4_K_M.gguf -r 1 --no-warmup -p 256 -n 64 -t 12 -ngl 40,44,48,56,99 -fa 1 -o md
+.\tools\llama-b8589-win-cuda\llama-bench.exe -m .\models\Qwen3.5-27B.Q4_K_M.gguf -r 1 --no-warmup -p 256 -n 64 -t 12 -ngl 40,44,48,56,99 -fa 1 -o md
 ```
 
 ---
@@ -293,4 +293,4 @@ Default profiles ship with these values. Run `shard recalc` to replace them with
 
 ## License
 
-This repo provides tooling and configuration only. The model weights are subject to their upstream license. See the [model card](https://huggingface.co/Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled) for details.
+This repo provides tooling and configuration only. The model weights are subject to their upstream license. See the [model card](https://huggingface.co/Jackrong/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF) for details.
