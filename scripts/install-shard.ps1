@@ -456,6 +456,11 @@ pwsh -NoProfile -File "%SCRIPT%" %*
     Write-Host "    shard detect     # see your hardware"
     Write-Host "    shard recalc     # auto-tune for your GPU"
     Write-Host "    shard            # start the server"
+    Write-Host ""
+    Write-Host "  Model management:"
+    Write-Host "    shard model      # show active model and installed models"
+    Write-Host "    shard model 9B   # switch active model to 9B"
+    Write-Host "    shard download   # download additional models"
 }
 
 # ── Main ───────────────────────────────────────────────────────────────────────
