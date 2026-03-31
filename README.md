@@ -68,10 +68,11 @@ shard: detected system specs
 
 Runs `llama-bench` and `llama-completion` across multiple GPU layer offload values and context sizes, then saves the fastest working configuration for each profile:
 
-1. Sweeps `-ngl` candidates at 4K context to find your best speed
-2. Probes 8K, 16K, and 32K context to find what your VRAM can handle
-3. Calculates optimal thread count from your CPU
-4. Saves everything to `.shard/profiles.json`
+1. **Detects your VRAM** and filters out ngl values that clearly won't fit
+2. Sweeps `-ngl` candidates at 4K context to find your best speed
+3. **Adaptively narrows** candidates for 8K, 16K, and 32K — each phase starts from the previous phase's proven max ngl and works downward, so no VRAM is left on the table and no time is wasted testing values that can't fit
+4. Calculates optimal thread count from your CPU
+5. Saves everything to `.shard/profiles.json`
 
 After recalc, every profile is tuned to **your** GPU — not someone else's.
 

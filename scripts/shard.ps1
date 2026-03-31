@@ -565,14 +565,12 @@ function Measure-ContextCandidate {
 
     # stderr has progress and timing - stream line by line for real-time output
     $allStderr = [System.Text.StringBuilder]::new()
-    $failed = $false
+    $overflowWarning = $false
     while ($null -ne ($sline = $proc.StandardError.ReadLine())) {
         [void]$allStderr.AppendLine($sline)
 
         if ($sline -match 'failed to fit params|CUDA out of memory|out of memory') {
-            $failed = $true
-            $el = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
-            Write-Host "    VRAM overflow - model does not fit at this ngl (${el}s)"
+            $overflowWarning = $true
         }
         elseif ($sline -match 'offloading (\d+).*layers') {
             $layerCount = $Matches[1]
@@ -582,7 +580,7 @@ function Measure-ContextCandidate {
             $loadS = [Math]::Round([double]$Matches[1] / 1000, 1)
             Write-Host "    Model loaded (${loadS}s), generating 64 tokens..."
         }
-        elseif ($sline -match 'eval time\s*=.*?([0-9.]+)\s*tokens per second') {
+        elseif ($sline -match '(?<!prompt )eval time\s*=.*?([0-9.]+)\s*tokens per second') {
             $tokSpeed = $Matches[1]
             Write-Host "    Speed: $tokSpeed tok/s"
         }
@@ -600,22 +598,24 @@ function Measure-ContextCandidate {
     $elRound = [Math]::Round($elapsed, 1)
     $out = $allStderr.ToString()
 
-    if ($proc.ExitCode -ne 0 -or $failed) {
-        if (-not $failed) {
+    if ($proc.ExitCode -ne 0) {
+        if ($overflowWarning) {
+            Write-Host "    VRAM overflow - model does not fit at this ngl (${elRound}s)"
+        } else {
             Write-Host "    Failed with exit code $($proc.ExitCode) (${elRound}s)"
         }
         Write-Host ''
         return $null
     }
 
-    $m = [regex]::Match($out, 'eval time\s*=.*?,\s*([0-9]+(\.[0-9]+)?)\s*tokens per second')
-    if (-not $m.Success) {
+    $m = [regex]::Matches($out, '(?<!prompt )eval time\s*=.*?,\s*([0-9]+(\.[0-9]+)?)\s*tokens per second')
+    if ($m.Count -eq 0) {
         Write-Host "    No speed data captured (${elRound}s)"
         Write-Host ''
         return $null
     }
 
-    $tps = [double]$m.Groups[1].Value
+    $tps = [double]$m[$m.Count - 1].Groups[1].Value
     Write-Host "    Done in ${elRound}s"
     Write-Host ''
     return $tps
@@ -671,8 +671,21 @@ function Recalculate-Profiles {
     Write-Host '  Bigger context = more conversation memory but needs more VRAM.'
     Write-Host ''
 
-    # -- Phase 1: 4K context bench sweep --
-    $candidates4096 = @(32, 40, 44, 48, 56, 64)
+    # Detect VRAM and compute adaptive candidate lists
+    $specs = Detect-SystemSpecs
+    $vramGB = $specs.VRAM_GB
+    # Full ngl range for the model (Qwen 27B = 64 layers)
+    $allNgl = @(8, 12, 16, 20, 24, 32, 40, 44, 48, 56, 64)
+    if ($vramGB) {
+        Write-Host ("  Detected VRAM: {0} GB - adapting candidates" -f $vramGB)
+        # Rough heuristic: each ngl layer ~230 MB for Q4 27B, KV cache adds ~0.5 MB/layer/1K context
+        # Filter out ngl values that clearly can't fit even at 4K
+        $maxPlausibleNgl = [int][Math]::Min(64, [Math]::Floor(($vramGB * 1024) / 230))
+        $candidates4096 = @($allNgl | Where-Object { $_ -le $maxPlausibleNgl })
+        if ($candidates4096.Count -eq 0) { $candidates4096 = @(8) }
+    } else {
+        $candidates4096 = @(8, 16, 24, 32, 40, 44, 48, 56, 64)
+    }
     $candidateArg = ($candidates4096 -join ",")
     $phaseCount = 4
     $currentPhase = 1
@@ -756,8 +769,11 @@ function Recalculate-Profiles {
     Write-Host ""
 
     # -- Phase 2: 8K context probing --
+    # Start from the best ngl that worked at 4K and step down
     $currentPhase = 2
-    $candidates8192 = @(56, 48, 44, 40, 32)
+    $maxProvenNgl = $best4096.Ngl
+    $candidates8192 = @($allNgl | Where-Object { $_ -le $maxProvenNgl } | Sort-Object -Descending)
+    if ($candidates8192.Count -eq 0) { $candidates8192 = @(8) }
     $results8192 = @()
 
     $ccount = $candidates8192.Count; $clist = $candidates8192 -join ', '
@@ -771,6 +787,7 @@ function Recalculate-Profiles {
         $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 8192 -threads $threads -candidateNum $cIdx -candidateTotal $ccount
         if ($null -ne $speed) {
             $results8192 += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+            break
         }
     }
 
@@ -784,8 +801,11 @@ function Recalculate-Profiles {
     Write-Host ""
 
     # -- Phase 3: 16K context probing --
+    # Start from 8K best and include values above and below
     $currentPhase = 3
-    $candidates16k = @(48, 44, 40, 32, 24, 20)
+    $anchor16k = if ($results8192.Count -gt 0) { $best8192.Ngl } else { $maxProvenNgl }
+    $candidates16k = @($allNgl | Where-Object { $_ -le $anchor16k } | Sort-Object -Descending)
+    if ($candidates16k.Count -eq 0) { $candidates16k = @(8) }
     $results16k = @()
 
     $ccount = $candidates16k.Count; $clist = $candidates16k -join ', '
@@ -812,8 +832,11 @@ function Recalculate-Profiles {
     Write-Host ""
 
     # -- Phase 4: 32K context probing --
+    # Start from 16K best and include values above and below
     $currentPhase = 4
-    $candidates32k = @(32, 24, 20, 16, 12, 8)
+    $anchor32k = if ($results16k.Count -gt 0) { $best16k.Ngl } else { $anchor16k }
+    $candidates32k = @($allNgl | Where-Object { $_ -le $anchor32k } | Sort-Object -Descending)
+    if ($candidates32k.Count -eq 0) { $candidates32k = @(8) }
     $results32k = @()
 
     $ccount = $candidates32k.Count; $clist = $candidates32k -join ', '
