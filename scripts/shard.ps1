@@ -1257,6 +1257,16 @@ function Recalculate-Profiles {
         Start-Sleep -Seconds 1
     }
 
+    # Kill any lingering llama processes before benchmarking
+    $staleProcs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ProcessName -match '^llama-(bench|completion|cli|server)$'
+    })
+    if ($staleProcs.Count -gt 0) {
+        Write-Host ("  Killing {0} lingering llama process(es)..." -f $staleProcs.Count)
+        $staleProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+    }
+
     Write-Host ''
     Write-Host ("  Recalculating {0} model(s): {1}" -f $targets.Count, ($targets -join ', '))
     Write-Host ''
