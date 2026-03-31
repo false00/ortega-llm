@@ -24,7 +24,13 @@ function Ensure-Dir([string]$path) {
 
 function Invoke-Download([string]$url, [string]$outFile) {
     Write-Host "Downloading: $url"
-    Invoke-WebRequest -Uri $url -OutFile $outFile
+    $prevProgress = $ProgressPreference
+    try {
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri $url -OutFile $outFile -UseBasicParsing
+    } finally {
+        $ProgressPreference = $prevProgress
+    }
 }
 
 function Get-NvidiaCudaVersion {
@@ -79,7 +85,8 @@ function Resolve-LlamaCppTag {
 
 function Install-LlamaRuntime {
     param(
-        [string]$tag
+        [string]$tag,
+        [bool]$forceDownload
     )
 
     $toolsDir = Join-Path $repoRoot "tools"
@@ -92,6 +99,11 @@ function Install-LlamaRuntime {
         Write-Host "Detected NVIDIA CUDA runtime version: $cudaVariant"
         $runtimeDirName = "llama-$tag-win-cuda-$($cudaVariant -replace '\\.', '_')"
         $runtimeDir = Join-Path $toolsDir $runtimeDirName
+
+        if ((Test-Path $runtimeDir) -and -not $forceDownload) {
+            Write-Host "Runtime already exists, skipping download: $runtimeDir"
+            return
+        }
 
         $mainZip = Join-Path $toolsDir "llama-$tag-bin-win-cuda-$cudaVariant-x64.zip"
         $cudartZip = Join-Path $toolsDir "cudart-llama-bin-win-cuda-$cudaVariant-x64.zip"
@@ -110,12 +122,21 @@ function Install-LlamaRuntime {
         Expand-Archive -Path $mainZip -DestinationPath $runtimeDir -Force
         Expand-Archive -Path $cudartZip -DestinationPath $runtimeDir -Force
 
+        Remove-Item -Path $mainZip -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $cudartZip -Force -ErrorAction SilentlyContinue
+
         Write-Host "Installed CUDA runtime to: $runtimeDir"
     } else {
         Write-Host "No NVIDIA CUDA detected. Installing CPU llama.cpp runtime."
 
         $runtimeDirName = "llama-$tag-win-cpu"
         $runtimeDir = Join-Path $toolsDir $runtimeDirName
+
+        if ((Test-Path $runtimeDir) -and -not $forceDownload) {
+            Write-Host "Runtime already exists, skipping download: $runtimeDir"
+            return
+        }
+
         $zipPath = Join-Path $toolsDir "llama-$tag-bin-win-cpu-x64.zip"
         $url = "https://github.com/ggml-org/llama.cpp/releases/download/$tag/llama-$tag-bin-win-cpu-x64.zip"
 
@@ -127,6 +148,8 @@ function Install-LlamaRuntime {
         Ensure-Dir $runtimeDir
 
         Expand-Archive -Path $zipPath -DestinationPath $runtimeDir -Force
+
+        Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
 
         Write-Host "Installed CPU runtime to: $runtimeDir"
     }
@@ -211,7 +234,7 @@ $resolvedTag = Resolve-LlamaCppTag -requestedTag $LlamaCppTag
 Write-Host "Using llama.cpp release tag: $resolvedTag"
 
 if (-not $SkipRuntimeDownload) {
-    Install-LlamaRuntime -tag $resolvedTag
+    Install-LlamaRuntime -tag $resolvedTag -forceDownload:$Force
 } else {
     Write-Host "Skipping runtime download (--SkipRuntimeDownload)"
 }
