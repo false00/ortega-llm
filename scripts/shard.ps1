@@ -541,7 +541,8 @@ function Measure-ContextCandidate {
         [int]$context,
         [int]$threads,
         [int]$candidateNum = 0,
-        [int]$candidateTotal = 0
+        [int]$candidateTotal = 0,
+        [int]$vramMarginMiB = 512
     )
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -566,6 +567,7 @@ function Measure-ContextCandidate {
     # stderr has progress and timing - stream line by line for real-time output
     $allStderr = [System.Text.StringBuilder]::new()
     $overflowWarning = $false
+    $freeVramMiB = -1
     while ($null -ne ($sline = $proc.StandardError.ReadLine())) {
         [void]$allStderr.AppendLine($sline)
 
@@ -586,6 +588,7 @@ function Measure-ContextCandidate {
         }
         elseif ($sline -match 'llama_memory_breakdown.*CUDA.*\|\s*(\d+)\s*=\s*(\d+)\s*\+') {
             $totalV = $Matches[1]; $freeV = $Matches[2]
+            $freeVramMiB = [int]$freeV
             $usedV = [int]$totalV - [int]$freeV
             Write-Host "    VRAM: ${usedV} / ${totalV} MiB used (${freeV} MiB free)"
         }
@@ -604,6 +607,13 @@ function Measure-ContextCandidate {
         } else {
             Write-Host "    Failed with exit code $($proc.ExitCode) (${elRound}s)"
         }
+        Write-Host ''
+        return $null
+    }
+
+    # Reject results with insufficient VRAM headroom — will crash in real use
+    if ($freeVramMiB -ge 0 -and $freeVramMiB -lt $vramMarginMiB) {
+        Write-Host "    Rejected: only ${freeVramMiB} MiB free (need ${vramMarginMiB} MiB margin for stability)"
         Write-Host ''
         return $null
     }
@@ -678,11 +688,15 @@ function Recalculate-Profiles {
     $allNgl = @(8, 12, 16, 20, 24, 32, 40, 44, 48, 56, 64)
     if ($vramGB) {
         Write-Host ("  Detected VRAM: {0} GB - adapting candidates" -f $vramGB)
-        # Rough heuristic: each ngl layer ~230 MB for Q4 27B, KV cache adds ~0.5 MB/layer/1K context
-        # Filter out ngl values that clearly can't fit even at 4K
-        $maxPlausibleNgl = [int][Math]::Min(64, [Math]::Floor(($vramGB * 1024) / 230))
-        $candidates4096 = @($allNgl | Where-Object { $_ -le $maxPlausibleNgl })
-        if ($candidates4096.Count -eq 0) { $candidates4096 = @(8) }
+        # Q4_K_M 27B: ~2 GB base overhead + ~220 MB per offloaded layer
+        # At 4K context, KV cache is small — keep full high end since
+        # llama-bench handles overflow gracefully, but skip low ngl values
+        # that are clearly suboptimal for this VRAM size
+        $availMiB = ($vramGB * 1024) - 2048 - 512
+        $minUsefulNgl = [int][Math]::Max(8, [Math]::Floor($availMiB / 220 * 0.3))
+        $candidates4096 = @($allNgl | Where-Object { $_ -ge $minUsefulNgl })
+        if ($candidates4096.Count -eq 0) { $candidates4096 = $allNgl }
+        Write-Host ("  Skipping ngl below {0} (too slow for {1} GB VRAM)" -f $minUsefulNgl, $vramGB)
     } else {
         $candidates4096 = @(8, 16, 24, 32, 40, 44, 48, 56, 64)
     }
@@ -812,13 +826,14 @@ function Recalculate-Profiles {
     Write-Host "[$currentPhase/$phaseCount] VRAM FIT TEST at 16K context (extended reasoning)"
     Write-Host '  16K context uses significantly more VRAM. Lower ngl values are'
     Write-Host '  expected here - some model layers move back to CPU to make room.'
-    Write-Host "  Candidates: ngl $clist"
+    Write-Host "  Candidates: ngl $clist (trying highest first, stopping when one works)"
     $cIdx = 0
     foreach ($ngl in $candidates16k) {
         $cIdx++
         $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 16384 -threads $threads -candidateNum $cIdx -candidateTotal $ccount
         if ($null -ne $speed) {
             $results16k += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+            break
         }
     }
 
@@ -844,13 +859,14 @@ function Recalculate-Profiles {
     Write-Host '  32K is the largest context window. This will be slowest but lets'
     Write-Host '  you feed very long documents or conversations. Many ngl values'
     Write-Host '  will fail here - that is normal.'
-    Write-Host "  Candidates: ngl $clist"
+    Write-Host "  Candidates: ngl $clist (trying highest first, stopping when one works)"
     $cIdx = 0
     foreach ($ngl in $candidates32k) {
         $cIdx++
         $speed = Measure-ContextCandidate -completionExe $completionExe -modelPath $modelPath -ngl $ngl -context 32768 -threads $threads -candidateNum $cIdx -candidateTotal $ccount
         if ($null -ne $speed) {
             $results32k += [pscustomobject]@{ Ngl = $ngl; TokensPerSecond = $speed }
+            break
         }
     }
 
