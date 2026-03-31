@@ -26,6 +26,68 @@ Best daily preset from tests:
 Measured real generation speed at this preset:
 - about `13.79` to `14.1` tokens/sec
 
+## Ortega Command Launcher (Recommended)
+
+You can control the local API server with a single command: `ortega`.
+
+### Install
+
+From repo root:
+
+```powershell
+.\scripts\install-ortega.ps1
+```
+
+What install does:
+- Creates command wrapper: `C:\Users\<you>\bin\ortega.cmd`
+- Adds `C:\Users\<you>\bin` to your user PATH (if missing)
+
+After install, open a new terminal.
+
+### Commands
+
+- `ortega`
+  - Starts profile `1` (daily default)
+
+- `ortega stop`
+  - Stops running server
+
+- `ortega ls`
+  - Lists all profiles and speed/context info
+
+- `ortega 1`
+  - Start/switch to profile 1
+
+- `ortega 2`
+  - Start/switch to profile 2
+
+- `ortega 3`
+  - Start/switch to profile 3
+
+- `ortega status`
+  - Shows current running profile, PID, and endpoint
+
+### Profile behavior
+
+- If you run `ortega 2` while profile 1 is running, it automatically does:
+  1. stop current server
+  2. start server with profile 2 settings
+
+### Profile list (used by `ortega ls`)
+
+| profile | name | settings | measured speed |
+|---:|---|---|---:|
+| 1 | Daily Default | `-ngl 56 -c 4096 -t 12 -fa on` | `13.79` to `14.1` tok/s |
+| 2 | Stability Fallback | `-ngl 48 -c 4096 -t 12 -fa on` | `9-10` tok/s |
+| 3 | Long Context | `-ngl 48 -c 8192 -t 12 -fa on` | `9.23` tok/s |
+
+### Logs and state
+
+Runtime state and logs are written to:
+- `.ortega/state.json`
+- `.ortega/server.stdout.log`
+- `.ortega/server.stderr.log`
+
 ## Daily Use (Simple Workflow)
 
 ### 1) Start local API server
@@ -37,6 +99,15 @@ Run this in PowerShell from repo root:
 
 Use it from apps that support OpenAI-style local endpoints at:
 - `http://127.0.0.1:8080`
+
+OpenAI-compatible base URL:
+- `http://127.0.0.1:8080/v1`
+
+Common endpoints:
+- `POST /v1/chat/completions`
+- `POST /v1/completions`
+- `GET /v1/models`
+- `GET /health`
 
 Stop server with `Ctrl+C`.
 
