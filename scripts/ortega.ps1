@@ -363,6 +363,10 @@ function Show-Info {
     if ($env:ORTEGA_MODEL_PATH) {
         Write-Host ("  ORTEGA_MODEL_PATH override:   {0}" -f $env:ORTEGA_MODEL_PATH)
     }
+
+    Write-Host ""
+    Write-Host "API endpoint (when server running):"
+    Write-Host "  http://127.0.0.1:8080/v1"
 }
 
 function Parse-BenchTg64 {
