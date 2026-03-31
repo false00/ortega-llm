@@ -344,9 +344,21 @@ function Show-Status {
     }
 
     $state = Get-ServerState
+    $profiles = Load-Profiles
+    $profile = $profiles[$state.ProfileId]
+
     Write-Host ("ortega: running profile {0} ({1})" -f $state.ProfileId, $state.ProfileName)
     Write-Host ("ortega: PID {0}" -f $running.Id)
-    Write-Host ("ortega: endpoint {0}" -f $state.Url)
+    Write-Host ""
+    Write-Host "Profile parameters:"
+    Write-Host ("  -ngl {0}" -f $profile.Ngl)
+    Write-Host ("  -c {0}" -f $profile.Context)
+    Write-Host ("  -t {0}" -f $profile.Threads)
+    Write-Host ("  -fa {0}" -f $profile.FlashAttn)
+    Write-Host ("  speed: {0}" -f $profile.Speed)
+    Write-Host ""
+    Write-Host "API endpoint:"
+    Write-Host ("  {0}" -f $state.Url)
 }
 
 function Show-Info {
@@ -363,10 +375,6 @@ function Show-Info {
     if ($env:ORTEGA_MODEL_PATH) {
         Write-Host ("  ORTEGA_MODEL_PATH override:   {0}" -f $env:ORTEGA_MODEL_PATH)
     }
-
-    Write-Host ""
-    Write-Host "API endpoint (when server running):"
-    Write-Host "  http://127.0.0.1:8080/v1"
 }
 
 function Parse-BenchTg64 {
